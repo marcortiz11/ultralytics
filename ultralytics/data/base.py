@@ -3,6 +3,7 @@
 import glob
 import math
 import os
+import sys
 import random
 from copy import deepcopy
 from multiprocessing.pool import ThreadPool
@@ -17,6 +18,9 @@ from torch.utils.data import Dataset
 from ultralytics.utils import DEFAULT_CFG, LOCAL_RANK, LOGGER, NUM_THREADS, TQDM
 
 from .utils import HELP_URL, IMG_FORMATS
+
+sys.path.insert(0, "/home/lava/Documents/thermal_far/")
+from thermal_far.motion_module.motion_pipeline import MotionPipeline
 
 
 class BaseDataset(Dataset):
@@ -60,6 +64,7 @@ class BaseDataset(Dataset):
                  pad=0.5,
                  single_cls=False,
                  classes=None,
+                 motion=False,
                  fraction=1.0):
         super().__init__()
         self.img_path = img_path
@@ -76,6 +81,7 @@ class BaseDataset(Dataset):
         self.batch_size = batch_size
         self.stride = stride
         self.pad = pad
+        self.motion = MotionPipeline("/home/lava/Documents/thermal_far/thermal_far/motion_module/motion_pipeline_config.yaml") if motion else None
         if self.rect:
             assert self.batch_size is not None
             self.set_rectangle()
@@ -249,6 +255,11 @@ class BaseDataset(Dataset):
                               label['resized_shape'][1] / label['ori_shape'][1])  # for evaluation
         if self.rect:
             label['rect_shape'] = self.batch_shapes[self.batch[index]]
+
+        if self.motion is not None:
+            img_motion = self.motion.run(label['img'])
+            label['img'] = img_motion
+
         return self.update_labels_info(label)
 
     def __len__(self):

@@ -1,4 +1,5 @@
 # Ultralytics YOLO 🚀, AGPL-3.0 license
+import sys
 import contextlib
 from itertools import repeat
 from multiprocessing.pool import ThreadPool

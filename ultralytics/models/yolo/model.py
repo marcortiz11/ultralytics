@@ -21,7 +21,7 @@ class YOLO(Model):
                 'predictor': yolo.classify.ClassificationPredictor, },
             'detect': {
                 'model': DetectionModel,
-                'trainer': yolo.detect.DetectionTrainer,
+                'trainer': yolo.detect.DetectionTrainerVS,
                 'validator': yolo.detect.DetectionValidator,
                 'predictor': yolo.detect.DetectionPredictor, },
             'segment': {

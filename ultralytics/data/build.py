@@ -69,13 +69,13 @@ def seed_worker(worker_id):  # noqa
     random.seed(worker_seed)
 
 
-def build_yolo_dataset(cfg, img_path, batch, data, mode='train', rect=False, stride=32):
+def build_yolo_dataset(cfg, img_path, batch, data, mode='train', rect=False, stride=32, augment=True, motion=False):
     """Build YOLO Dataset"""
     return YOLODataset(
         img_path=img_path,
         imgsz=cfg.imgsz,
         batch_size=batch,
-        augment=mode == 'train',  # augmentation
+        augment=augment,  # augmentation
         hyp=cfg,  # TODO: probably add a get_hyps_from_cfg function
         rect=cfg.rect or rect,  # rectangular batches
         cache=cfg.cache or None,
@@ -87,6 +87,7 @@ def build_yolo_dataset(cfg, img_path, batch, data, mode='train', rect=False, str
         use_keypoints=cfg.task == 'pose',
         classes=cfg.classes,
         data=data,
+        motion=motion,
         fraction=cfg.fraction if mode == 'train' else 1.0)
 
 
