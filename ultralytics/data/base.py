@@ -5,6 +5,7 @@ import math
 import os
 import sys
 import random
+import threading
 from copy import deepcopy
 from multiprocessing.pool import ThreadPool
 from pathlib import Path
@@ -21,6 +22,7 @@ from .utils import HELP_URL, IMG_FORMATS
 
 sys.path.insert(0, "/home/lava/Documents/thermal_far/")
 from thermal_far.motion_module.motion_pipeline import MotionPipeline
+from thermal_far import motion_module
 
 
 class BaseDataset(Dataset):
@@ -81,7 +83,8 @@ class BaseDataset(Dataset):
         self.batch_size = batch_size
         self.stride = stride
         self.pad = pad
-        self.motion = MotionPipeline("/home/lava/Documents/thermal_far/thermal_far/motion_module/motion_pipeline_config.yaml") if motion else None
+        motion_config = os.path.abspath(os.path.dirname(motion_module.__file__)) + "/motion_pipeline_config.yaml"
+        self.motion = MotionPipeline(motion_config) if motion else None
         if self.rect:
             assert self.batch_size is not None
             self.set_rectangle()
@@ -173,6 +176,10 @@ class BaseDataset(Dataset):
                     j = self.buffer.pop(0)
                     self.ims[j], self.im_hw0[j], self.im_hw[j] = None, None, None
 
+            if self.motion is not None:
+                # print(threading.get_ident(), f)
+                im = self.motion.run(im)
+
             return im, (h0, w0), im.shape[:2]
 
         return self.ims[i], self.im_hw0[i], self.im_hw[i]
@@ -181,8 +188,25 @@ class BaseDataset(Dataset):
         """Cache images to memory or disk."""
         b, gb = 0, 1 << 30  # bytes of cached images, bytes per gigabytes
         fcn = self.cache_images_to_disk if cache == 'disk' else self.load_image
+
+        results = []
+        for i in range(self.ni):
+            results.append(fcn(i))
+
+        """
+        pbar = TQDM(enumerate(results), total=self.ni, disable=LOCAL_RANK > 0)
+        for i, x in pbar:
+            if cache == 'disk':
+                b += self.npy_files[i].stat().st_size
+            else:  # 'ram'
+                self.ims[i], self.im_hw0[i], self.im_hw[i] = x  # im, hw_orig, hw_resized = load_image(self, i)
+                b += self.ims[i].nbytes
+            pbar.desc = f'{self.prefix}Caching images ({b / gb:.1f}GB {cache})'
+        pbar.close()
+        """
+
         with ThreadPool(NUM_THREADS) as pool:
-            results = pool.imap(fcn, range(self.ni))
+            results = pool.imap(fcn, range(self.ni), chunksize=round(self.ni/NUM_THREADS))
             pbar = TQDM(enumerate(results), total=self.ni, disable=LOCAL_RANK > 0)
             for i, x in pbar:
                 if cache == 'disk':
@@ -193,7 +217,7 @@ class BaseDataset(Dataset):
                 pbar.desc = f'{self.prefix}Caching images ({b / gb:.1f}GB {cache})'
             pbar.close()
 
-    def cache_images_to_disk(self, i):
+    def cache_images_to_disk(self, i, motion=None):
         """Saves an image as an *.npy file for faster loading."""
         f = self.npy_files[i]
         if not f.exists():
@@ -255,10 +279,6 @@ class BaseDataset(Dataset):
                               label['resized_shape'][1] / label['ori_shape'][1])  # for evaluation
         if self.rect:
             label['rect_shape'] = self.batch_shapes[self.batch[index]]
-
-        if self.motion is not None:
-            img_motion = self.motion.run(label['img'])
-            label['img'] = img_motion
 
         return self.update_labels_info(label)
 
