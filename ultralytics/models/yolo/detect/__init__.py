@@ -5,4 +5,4 @@ from .train import DetectionTrainer
 from .train_video_sequence import DetectionTrainerVS
 from .val import DetectionValidator
 
-__all__ = 'DetectionPredictor', 'DetectionTrainerVS', 'DetectionValidator'
+__all__ = 'DetectionPredictor', 'DetectionTrainer', 'DetectionValidator'
