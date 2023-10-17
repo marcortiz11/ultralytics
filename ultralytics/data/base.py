@@ -98,7 +98,7 @@ class BaseDataset(Dataset):
             cache = False
         self.ims, self.im_hw0, self.im_hw = [None] * self.ni, [None] * self.ni, [None] * self.ni
         self.npy_files = [Path(f).with_suffix('.npy') for f in self.im_files]
-        if cache:
+        if cache or motion:
             self.cache_images(cache)
 
         # Transforms
@@ -177,7 +177,6 @@ class BaseDataset(Dataset):
                     self.ims[j], self.im_hw0[j], self.im_hw[j] = None, None, None
 
             if self.motion is not None:
-                # print(threading.get_ident(), f)
                 im = self.motion.run(im)
 
             return im, (h0, w0), im.shape[:2]
@@ -205,7 +204,7 @@ class BaseDataset(Dataset):
         pbar.close()
         """
 
-        with ThreadPool(NUM_THREADS) as pool:
+        with ThreadPool(1) as pool:
             results = pool.imap(fcn, range(self.ni), chunksize=round(self.ni/NUM_THREADS))
             pbar = TQDM(enumerate(results), total=self.ni, disable=LOCAL_RANK > 0)
             for i, x in pbar:
@@ -221,7 +220,10 @@ class BaseDataset(Dataset):
         """Saves an image as an *.npy file for faster loading."""
         f = self.npy_files[i]
         if not f.exists():
-            np.save(f.as_posix(), cv2.imread(self.im_files[i]), allow_pickle=False)
+            if self.motion is not None:
+                np.save(f.as_posix(), self.motion.run(cv2.imread(self.im_files[i])), allow_pickle=False)
+            else:
+                np.save(f.as_posix(), cv2.imread(self.im_files[i]), allow_pickle=False)
 
     def check_cache_ram(self, safety_margin=0.5):
         """Check image caching requirements vs available memory."""
