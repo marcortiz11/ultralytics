@@ -177,7 +177,7 @@ class BaseDataset(Dataset):
                     self.ims[j], self.im_hw0[j], self.im_hw[j] = None, None, None
 
             if self.motion is not None:
-                im = self.motion.run(im)
+                im = self.motion.run(im, self.labels[i])
 
             return im, (h0, w0), im.shape[:2]
 
