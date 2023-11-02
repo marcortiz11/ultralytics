@@ -495,6 +495,22 @@ class RandomHSV:
         return labels
 
 
+class MotionAugment:
+    def __init__(self, p_hide_img=0.2, p_hide_motion=0.2, p_add_noise_motion=0.0) -> None:
+
+        self.p_hide_img = p_hide_img
+        self.p_hide_motion = p_hide_motion
+        self.p_add_noise_motion = p_add_noise_motion
+
+    def __call__(self, labels):
+        """Applies image Motion augmentation"""
+        if self.p_hide_motion and random.random() < self.p_hide_motion:
+            labels['img'][:, :, 1] *= 0
+        elif self.p_hide_img and random.random() < self.p_hide_img:
+            labels['img'][:, :, 0] = 0
+        return labels
+
+
 class RandomFlip:
     """Applies random horizontal or vertical flip to an image with a given probability."""
 
@@ -782,6 +798,7 @@ def v8_transforms(dataset, imgsz, hyp, stretch=False):
             raise ValueError(f'data.yaml flip_idx={flip_idx} length must be equal to kpt_shape[0]={kpt_shape[0]}')
 
     return Compose([
+        MotionAugment(),
         pre_transform,
         MixUp(dataset, pre_transform=pre_transform, p=hyp.mixup),
         Albumentations(p=1.0),

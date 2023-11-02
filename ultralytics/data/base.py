@@ -176,9 +176,6 @@ class BaseDataset(Dataset):
                     j = self.buffer.pop(0)
                     self.ims[j], self.im_hw0[j], self.im_hw[j] = None, None, None
 
-            if self.motion is not None:
-                im = self.motion.run(im, self.labels[i])
-
             return im, (h0, w0), im.shape[:2]
 
         return self.ims[i], self.im_hw0[i], self.im_hw[i]
@@ -216,12 +213,12 @@ class BaseDataset(Dataset):
                 pbar.desc = f'{self.prefix}Caching images ({b / gb:.1f}GB {cache})'
             pbar.close()
 
-    def cache_images_to_disk(self, i, motion=None):
+    def cache_images_to_disk(self, i):
         """Saves an image as an *.npy file for faster loading."""
         f = self.npy_files[i]
         if not f.exists():
             if self.motion is not None:
-                np.save(f.as_posix(), self.motion.run(cv2.imread(self.im_files[i])), allow_pickle=False)
+                np.save(f.as_posix(), self.motion.run(cv2.imread(self.im_files[i], cv2.IMREAD_COLOR)), allow_pickle=False)
             else:
                 np.save(f.as_posix(), cv2.imread(self.im_files[i]), allow_pickle=False)
 
