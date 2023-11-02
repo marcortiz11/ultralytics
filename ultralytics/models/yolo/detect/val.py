@@ -182,7 +182,7 @@ class DetectionValidator(BaseValidator):
         iou = box_iou(labels[:, 1:], detections[:, :4])
         return self.match_predictions(detections[:, 5], labels[:, 0], iou)
 
-    def build_dataset(self, img_path, mode='val', batch=None):
+    def build_dataset(self, img_path, mode='val', batch=None, motion=None):
         """
         Build YOLO Dataset.
 
