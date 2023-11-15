@@ -7,7 +7,7 @@ import numpy as np
 from ultralytics.data import build_dataloader, build_yolo_dataset, build_yolovideo_dataset
 from ultralytics.engine.trainer import BaseTrainer
 from ultralytics.models import yolo
-from ultralytics.nn.tasks import DetectionModel
+from ultralytics.nn.tasks import DetectionModel3D
 from ultralytics.utils import LOGGER, RANK
 from ultralytics.utils.plotting import plot_images, plot_labels, plot_results
 from ultralytics.utils.torch_utils import de_parallel, torch_distributed_zero_first
@@ -37,19 +37,7 @@ class DetectionTrainer(BaseTrainer):
             batch (int, optional): Size of batches, this is for `rect`. Defaults to None.
         """
         gs = max(int(de_parallel(self.model).stride.max() if self.model else 0), 32)
-        if video:
-            return build_yolovideo_dataset(self.args,
-                                           img_path,
-                                           batch,
-                                           self.data,
-                                           mode=mode,
-                                           motion=motion,
-                                           rect=mode == 'val',
-                                           augment=True,
-                                           stride=gs,
-                                           seq_length=seq_length)
-        else:
-            return build_yolo_dataset(self.args,
+        return build_yolovideo_dataset(self.args,
                                        img_path,
                                        batch,
                                        self.data,
@@ -57,7 +45,8 @@ class DetectionTrainer(BaseTrainer):
                                        motion=motion,
                                        rect=mode == 'val',
                                        augment=True,
-                                       stride=gs)
+                                       stride=gs,
+                                       seq_length=seq_length)
 
     def get_dataloader(self, dataset_path, batch_size=16, rank=0, mode='train', motion=False, video=False, seq_length=12):
         """Construct and return dataloader."""
@@ -88,7 +77,7 @@ class DetectionTrainer(BaseTrainer):
 
     def get_model(self, cfg=None, weights=None, verbose=True, video=False, seq_length=12):
         """Return a YOLO detection model."""
-        model = DetectionModel(cfg, nc=self.data['nc'], verbose=verbose and RANK == -1)
+        model = DetectionModel3D(cfg, nc=self.data['nc'], verbose=verbose and RANK == -1)
         if weights:
             model.load(weights)
         return model

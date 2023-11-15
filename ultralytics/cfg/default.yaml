@@ -40,6 +40,8 @@ mask_ratio: 4  # (int) mask downsample ratio (segment train only)
 dropout: 0.0  # (float) use dropout regularization (classify train only)
 # Sequence
 motion: False
+video: False
+seq_length: 12
 
 # Val/Test settings ----------------------------------------------------------------------------------------------------
 val: True  # (bool) validate/test during training

@@ -15,7 +15,7 @@ from ultralytics.data.utils import IMG_FORMATS, VID_FORMATS
 from ultralytics.utils import RANK, colorstr
 from ultralytics.utils.checks import check_file
 
-from .dataset import YOLODataset
+from .dataset import YOLODataset, YOLOVideoDataset
 from .utils import PIN_MEMORY
 
 
@@ -91,6 +91,29 @@ def build_yolo_dataset(cfg, img_path, batch, data, mode='train', rect=False, str
         fraction=cfg.fraction if mode == 'train' else 1.0)
 
 
+def build_yolovideo_dataset(cfg, img_path, batch, data, mode='train', rect=False, stride=32, augment=True, motion=False, seq_length=12):
+    """Build YOLO Dataset"""
+    return YOLOVideoDataset(
+        img_path=img_path,
+        imgsz=cfg.imgsz,
+        batch_size=batch,
+        augment=augment and mode == 'train',  # augmentation
+        hyp=cfg,  # TODO: probably add a get_hyps_from_cfg function
+        rect=cfg.rect or rect,  # rectangular batches
+        cache=cfg.cache or motion or None,
+        single_cls=cfg.single_cls or False,
+        stride=int(stride),
+        pad=0.0 if mode == 'train' else 0.5,
+        prefix=colorstr(f'{mode}: '),
+        use_segments=cfg.task == 'segment',
+        use_keypoints=cfg.task == 'pose',
+        classes=cfg.classes,
+        data=data,
+        motion=motion,
+        seq_length=seq_length,
+        fraction=cfg.fraction if mode == 'train' else 1.0)
+
+
 def build_dataloader(dataset, batch, workers, shuffle=True, rank=-1):
     """Return an InfiniteDataLoader or DataLoader for training or validation set."""
     batch = min(batch, len(dataset))
@@ -102,7 +125,7 @@ def build_dataloader(dataset, batch, workers, shuffle=True, rank=-1):
     return InfiniteDataLoader(dataset=dataset,
                               batch_size=batch,
                               shuffle=shuffle and sampler is None,
-                              num_workers=nw,
+                              num_workers=1,
                               sampler=sampler,
                               pin_memory=PIN_MEMORY,
                               collate_fn=getattr(dataset, 'collate_fn', None),

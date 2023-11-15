@@ -2,7 +2,7 @@
 
 from ultralytics.engine.model import Model
 from ultralytics.models import yolo  # noqa
-from ultralytics.nn.tasks import ClassificationModel, DetectionModel, PoseModel, SegmentationModel
+from ultralytics.nn.tasks import ClassificationModel, DetectionModel, PoseModel, SegmentationModel, DetectionModel3D
 
 
 class YOLO(Model):
@@ -24,6 +24,11 @@ class YOLO(Model):
                 'trainer': yolo.detect.DetectionTrainer,
                 'validator': yolo.detect.DetectionValidator,
                 'predictor': yolo.detect.DetectionPredictor, },
+            'detect3d': {
+                'model': DetectionModel3D,
+                'trainer': yolo.detect3d.DetectionTrainer,
+                'validator': yolo.detect3d.DetectionValidator,
+                'predictor': yolo.detect3d.DetectionPredictor, },
             'segment': {
                 'model': SegmentationModel,
                 'trainer': yolo.segment.SegmentationTrainer,

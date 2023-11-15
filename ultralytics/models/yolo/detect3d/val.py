@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from ultralytics.data import build_dataloader, build_yolo_dataset, converter
+from ultralytics.data import build_dataloader, build_yolovideo_dataset, converter
 from ultralytics.engine.validator import BaseValidator
 from ultralytics.utils import LOGGER, ops
 from ultralytics.utils.checks import check_requirements
@@ -182,7 +182,7 @@ class DetectionValidator(BaseValidator):
         iou = box_iou(labels[:, 1:], detections[:, :4])
         return self.match_predictions(detections[:, 5], labels[:, 0], iou)
 
-    def build_dataset(self, img_path, mode='val', batch=None, motion=None):
+    def build_dataset(self, img_path, mode='val', batch=None, motion=None, video=False, seq_length=8):
         """
         Build YOLO Dataset.
 
@@ -191,12 +191,21 @@ class DetectionValidator(BaseValidator):
             mode (str): `train` mode or `val` mode, users are able to customize different augmentations for each mode.
             batch (int, optional): Size of batches, this is for `rect`. Defaults to None.
         """
-        gs = max(int(de_parallel(self.model).stride if self.model else 0), 32)
-        return build_yolo_dataset(self.args, img_path, batch, self.data, mode=mode, stride=gs, motion=True)
+        gs = max(int(de_parallel(self.model).stride.max() if self.model else 0), 32)
+        return build_yolovideo_dataset(self.args,
+                                       img_path,
+                                       batch,
+                                       self.data,
+                                       mode=mode,
+                                       motion=motion,
+                                       rect=mode == 'val',
+                                       augment=False,
+                                       stride=gs,
+                                       seq_length=seq_length)
 
-    def get_dataloader(self, dataset_path, batch_size):
+    def get_dataloader(self, dataset_path, batch_size, motion=False, video=False, seq_length=8):
         """Construct and return dataloader."""
-        dataset = self.build_dataset(dataset_path, batch=batch_size, mode='val')
+        dataset = self.build_dataset(dataset_path, batch=batch_size, mode='val', motion=motion, video=video, seq_length=seq_length)
         return build_dataloader(dataset, batch_size, self.args.workers, shuffle=False, rank=-1)  # return dataloader
 
     def plot_val_samples(self, batch, ni):

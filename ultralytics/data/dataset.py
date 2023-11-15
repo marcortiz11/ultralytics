@@ -1,5 +1,6 @@
 # Ultralytics YOLO 🚀, AGPL-3.0 license
 import sys
+import math
 import contextlib
 from itertools import repeat
 from multiprocessing.pool import ThreadPool
@@ -12,7 +13,7 @@ import torchvision
 
 from ultralytics.utils import LOCAL_RANK, NUM_THREADS, TQDM, colorstr, is_dir_writeable
 
-from .augment import Compose, Format, Instances, LetterBox, classify_albumentations, classify_transforms, v8_transforms
+from .augment import Compose, Format, Format3D, Instances, LetterBox, LetterBox3D, classify_albumentations, classify_transforms, v8_transforms, v8_3d_transforms
 from .base import BaseDataset
 from .utils import HELP_URL, LOGGER, get_hash, img2label_paths, verify_image, verify_image_label
 
@@ -180,6 +181,121 @@ class YOLODataset(BaseDataset):
             if k == 'img':
                 value = torch.stack(value, 0)
             if k in ['masks', 'keypoints', 'bboxes', 'cls']:
+                value = torch.cat(value, 0)
+            new_batch[k] = value
+        new_batch['batch_idx'] = list(new_batch['batch_idx'])
+        for i in range(len(new_batch['batch_idx'])):
+            new_batch['batch_idx'][i] += i  # add target image index for build_targets()
+        new_batch['batch_idx'] = torch.cat(new_batch['batch_idx'], 0)
+        return new_batch
+
+
+class YOLOVideoDataset(YOLODataset):
+
+    def __init__(self, *args, seq_length=12, data=None, use_segments=False, use_keypoints=False, **kwargs):
+        self.seq_length = seq_length
+        assert seq_length > 1, 'Sequence length should be > 1'
+
+        super().__init__(*args, data=data, use_segments=use_segments, use_keypoints=use_keypoints, **kwargs)
+
+    def build_transforms(self, hyp=None):
+        if self.augment:
+            hyp.mosaic = hyp.mosaic
+            hyp.mixup = 0.0
+            transforms = v8_3d_transforms(self, self.imgsz, hyp)
+        else:
+            transforms = Compose([LetterBox3D(new_shape=(self.imgsz, self.imgsz), scaleup=False)])
+        transforms.append(
+            Format3D(bbox_format='xywh',
+                   normalize=True,
+                   return_mask=self.use_segments,
+                   return_keypoint=self.use_keypoints,
+                   batch_idx=True,
+                   mask_ratio=hyp.mask_ratio,
+                   mask_overlap=hyp.overlap_mask))
+        return transforms
+
+    def load_image(self, i, rect_mode=True):
+        """Loads 1 image from dataset index 'i', returns (im, resized hw)."""
+        im, f, fn = self.ims[i], self.im_files[i], self.npy_files[i]
+        if im is None:  # not cached in RAM
+            if fn.exists():  # load npy
+                im = np.load(fn)
+            else:  # read image
+                im = cv2.imread(f)  # BGR
+                if im is None:
+                    raise FileNotFoundError(f'Image Not Found {f}')
+            h0, w0 = im.shape[:2]  # orig hw
+            if rect_mode:  # resize long side to imgsz while maintaining aspect ratio
+                r = self.imgsz / max(h0, w0)  # ratio
+                if r != 1:  # if sizes are not equal
+                    w, h = (min(math.ceil(w0 * r), self.imgsz), min(math.ceil(h0 * r), self.imgsz))
+                    im = cv2.resize(im, (w, h), interpolation=cv2.INTER_LINEAR)
+            elif not (h0 == w0 == self.imgsz):  # resize by stretching image to square imgsz
+                im = cv2.resize(im, (self.imgsz, self.imgsz), interpolation=cv2.INTER_LINEAR)
+
+            # Add to buffer if training with augmentations
+            if self.augment:
+                self.ims[i], self.im_hw0[i], self.im_hw[i] = im, (h0, w0), im.shape[:2]  # im, hw_original, hw_resized
+                self.buffer.append(i)
+                if len(self.buffer) >= self.max_buffer_length:
+                    j = self.buffer.pop(0)
+                    self.ims[j], self.im_hw0[j], self.im_hw[j] = None, None, None
+
+            return im, (h0, w0), im.shape[:2]
+
+        return self.ims[i], self.im_hw0[i], self.im_hw[i]
+
+    def __len__(self):
+        """Returns the length of the labels list for the dataset."""
+        return len(self.labels) - self.seq_length
+
+    def __getitem__(self, index):
+        """Returns transformed label information for given index."""
+        sequence = self.get_sequence(index)
+        y = self.transforms(sequence)
+        return y
+
+    def get_sequence(self, index):
+        new_sequence = []
+
+        for frame_id in range(self.seq_length):
+            idx = index + frame_id
+            label = self.get_image_and_label(idx)
+            new_sequence.append(label)
+
+        # From list to arrays of sequences
+        video_label = new_sequence[0]
+        video_label['im_file'] = []
+
+        for label in new_sequence[1:]:
+            frame = label['img']
+            frame_name = label['im_file']
+
+            same_shape = len(video_label['img'].shape) == len(frame.shape)
+            previous_sequence = video_label['img'][None, ...] if same_shape else video_label['img']
+            new_elem_sequence = frame[None, ...]
+
+            video_label['img'] = np.concatenate((previous_sequence, new_elem_sequence), 0)
+            video_label['im_file'].append(frame_name)
+
+        for key in video_label.keys():
+            if key not in ['img', 'im_file']:
+                video_label[key] = new_sequence[-1][key]
+
+        return video_label
+
+    @staticmethod
+    def collate_fn(batch):
+        """Collates data samples into batches."""
+        new_batch = {}
+        keys = batch[0].keys()
+        values = list(zip(*[list(b.values()) for b in batch]))
+        for i, k in enumerate(keys):
+            value = values[i]
+            if k == 'img':
+                value = torch.stack(value, 0).permute(0, 2, 1, 3, 4)
+            elif k in ['masks', 'keypoints', 'bboxes', 'cls']:
                 value = torch.cat(value, 0)
             new_batch[k] = value
         new_batch['batch_idx'] = list(new_batch['batch_idx'])

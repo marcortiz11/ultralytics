@@ -255,9 +255,21 @@ class BaseTrainer:
 
         # Dataloaders
         batch_size = self.batch_size // max(world_size, 1)
-        self.train_loader = self.get_dataloader(self.trainset, batch_size=batch_size, rank=RANK, mode='train', motion=self.args.motion)
+        self.train_loader = self.get_dataloader(self.trainset,
+                                                batch_size=batch_size,
+                                                rank=RANK,
+                                                mode='train',
+                                                motion=self.args.motion,
+                                                video=self.args.video,
+                                                seq_length=self.args.seq_length)
         if RANK in (-1, 0):
-            self.test_loader = self.get_dataloader(self.testset, batch_size=batch_size * 2, rank=-1, mode='val', motion=self.args.motion)
+            self.test_loader = self.get_dataloader(self.testset,
+                                                   batch_size=batch_size * 2,
+                                                   rank=-1,
+                                                   mode='val',
+                                                   motion=self.args.motion,
+                                                   video=self.args.video,
+                                                   seq_length=self.args.seq_length)
             self.validator = self.get_validator()
             metric_keys = self.validator.metrics.keys + self.label_loss_items(prefix='val')
             self.metrics = dict(zip(metric_keys, [0] * len(metric_keys)))
@@ -468,7 +480,7 @@ class BaseTrainer:
             cfg = ckpt['model'].yaml
         else:
             cfg = model
-        self.model = self.get_model(cfg=cfg, weights=weights, verbose=RANK == -1)  # calls Model(cfg, weights)
+        self.model = self.get_model(cfg=cfg, weights=weights, verbose=RANK == -1, video=self.args.video)  # calls Model(cfg, weights)
         return ckpt
 
     def optimizer_step(self):

@@ -10,7 +10,7 @@ import torch
 import torch.nn as nn
 
 __all__ = ('Conv', 'Conv2', 'LightConv', 'DWConv', 'DWConvTranspose2d', 'ConvTranspose', 'Focus', 'GhostConv',
-           'ChannelAttention', 'SpatialAttention', 'CBAM', 'Concat', 'RepConv', 'Conv3D')
+           'ChannelAttention', 'SpatialAttention', 'CBAM', 'Concat', 'RepConv', 'Conv3D', 'Upsample', 'Squeeze')
 
 
 def autopad(k, p=None, d=1):  # kernel, padding, dilation
@@ -46,20 +46,43 @@ class Conv3D(nn.Module):
     """3D convolution with args(ch_in, ch_out, kernel, stride, padding, groups, dilation, activation)."""
     default_act = nn.SiLU()  # default activation
 
-    def __init__(self, c1, c2, k=1, s=1, p=None, g=1, d=1, act=True):
+    def __init__(self, c1, c2, k=1, s=1, p=1, g=1, d=1, act=True):
         """Initialize Conv layer with given arguments including activation."""
         super().__init__()
-        self.conv = nn.Conv3d(c1, c2, k, s, autopad(k, p, d), groups=g, dilation=d, bias=False)
+        self.conv = [c1, c2, k, s, p, g, d]
         self.bn = nn.BatchNorm3d(c2)
         self.act = self.default_act if act is True else act if isinstance(act, nn.Module) else nn.Identity()
 
     def forward(self, x):
         """Apply convolution, batch normalization and activation to input tensor."""
-        return self.act(self.bn(self.conv(x)))
+        #print('Conv3D input', x.shape)
+
+        if isinstance(self.conv, list):
+            # Adjust kernel
+            new_kernel = []
+            if isinstance(self.conv[2], list):
+                for i, s in enumerate(self.conv[2]):
+                    if s == -1:
+                        new_kernel.append(x.shape[i + 2])
+                    else:
+                        new_kernel.append(s)
+            else:
+                new_kernel = self.conv[2]
+
+            self.conv = nn.Conv3d(self.conv[0], self.conv[1], new_kernel, stride=self.conv[3], padding=self.conv[4],
+                                  groups=self.conv[5], dilation=self.conv[6], bias=False)
+
+        y = self.act(self.bn(self.conv(x)))
+
+        #print('Conv3D output', y.shape)
+        return y
 
     def forward_fuse(self, x):
         """Perform transposed convolution of 2D data."""
-        return self.act(self.conv(x))
+        ##print('Conv3D input', x.shape)
+        y = self.act(self.conv(x))
+        ##print('Conv3D output', y.shape)
+        return y
 
 
 class Conv2(Conv):
@@ -311,4 +334,38 @@ class Concat(nn.Module):
 
     def forward(self, x):
         """Forward pass for the YOLOv8 mask Proto module."""
+        # for x_elem in x:
+            #print('Concat input', x_elem.shape)
         return torch.cat(x, self.d)
+
+
+class Upsample(nn.Module):
+    """Concatenate a list of tensors along dimension."""
+
+    def __init__(self, size=None, scale_factor=2, mode='nearest', *args):
+        """Concatenates a list of tensors along a specified dimension."""
+        super().__init__()
+        self.upsample = torch.nn.Upsample(size, tuple(scale_factor), mode, *args)
+
+    def forward(self, x):
+        """Forward pass for the YOLOv8 mask Proto module."""
+        #print('Upsample input', x.shape)
+        y = self.upsample(x)
+        #print('Upsample output', y.shape)
+        return y
+
+
+class Squeeze(nn.Module):
+    """Concatenate a list of tensors along dimension."""
+
+    def __init__(self, dim=None):
+        """Concatenates a list of tensors along a specified dimension."""
+        super().__init__()
+        self.dim = dim
+
+    def forward(self, x):
+        """Forward pass for the YOLOv8 mask Proto module."""
+        #print('Squeeze input', x.shape)
+        y = torch.squeeze(x, self.dim)
+        #print('Squeeze output', y.shape)
+        return y
