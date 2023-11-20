@@ -137,6 +137,7 @@ class BaseMixTransform3D:
         # Mosaic or MixUp
         labels = self._mix_transform(labels)
         labels.pop('mix_labels', None)
+
         return labels
 
     def _mix_transform(self, labels):
@@ -327,10 +328,7 @@ class Mosaic3D(BaseMixTransform3D):
 
     def get_indexes(self, buffer=True):
         """Return a list of random indexes from the dataset."""
-        if buffer:  # select images from buffer
-            return random.choices(list(self.dataset.buffer), k=self.n - 1)
-        else:  # select any images
-            return [random.randint(0, len(self.dataset) - 1) for _ in range(self.n - 1)]
+        return [random.randint(0, len(self.dataset) - 1) for _ in range(self.n - 1)]
 
     def _mix_transform(self, labels):
         """Apply mixup transformation to the input image and labels."""
@@ -372,6 +370,17 @@ class Mosaic3D(BaseMixTransform3D):
             mosaic_labels.append(labels_patch)
         final_labels = self._cat_labels(mosaic_labels)
         final_labels['img'] = img4
+
+        """
+        # Display bounding boxes
+        for bbox in final_labels['instances'].bboxes:
+            point1 = (int(bbox[0]), int(bbox[1]))
+            point2 = (int(bbox[2]), int(bbox[3]))
+            img4[-1, ...] = cv2.rectangle(img4[-1, ...], point1, point2, (255, 0, 0), 3)
+
+        cv2.imshow("imatge", img4[-1, ...])
+        cv2.waitKey(5000)
+        """
         return final_labels
 
     def _mosaic9(self, labels):
@@ -618,6 +627,180 @@ class RandomPerspective:
         return (w2 > wh_thr) & (h2 > wh_thr) & (w2 * h2 / (w1 * h1 + eps) > area_thr) & (ar < ar_thr)  # candidates
 
 
+class RandomPerspective3D:
+
+    def __init__(self,
+                 degrees=0.0,
+                 translate=0.1,
+                 scale=0.5,
+                 border=(0, 0),
+                 pre_transform=None):
+        self.degrees = degrees
+        self.translate = translate
+        self.scale = scale
+        self.border = border
+        self.pre_transform = pre_transform
+
+    def affine_transform(self, sequence, border):
+        """Center."""
+        C = np.eye(3, dtype=np.float32)
+
+        C[0, 2] = -sequence.shape[2] / 2  # x translation (pixels)
+        C[1, 2] = -sequence.shape[1] / 2  # y translation (pixels)
+
+        # Rotation and Scale
+        R = np.eye(3, dtype=np.float32)
+        a = random.uniform(-self.degrees, self.degrees)
+        # a += random.choice([-180, -90, 0, 90])  # add 90deg rotations to small rotations
+        s = random.uniform(1 - self.scale, 1 + self.scale)
+        # s = 2 ** random.uniform(-scale, scale)
+        R[:2] = cv2.getRotationMatrix2D(angle=a, center=(0, 0), scale=s)
+
+        # Translation
+        T = np.eye(3, dtype=np.float32)
+        T[0, 2] = random.uniform(0.5 - self.translate, 0.5 + self.translate) * self.size[0]  # x translation (pixels)
+        T[1, 2] = random.uniform(0.5 - self.translate, 0.5 + self.translate) * self.size[1]  # y translation (pixels)
+
+        # Combined rotation matrix
+        M = T @ R @ C  # order of operations (right to left) is IMPORTANT
+        # Affine image
+        if (border[0] != 0) or (border[1] != 0) or (M != np.eye(3)).any():  # image changed
+            new_sequence = np.zeros((sequence.shape[0], *self.size, 3), dtype=np.uint8)
+            for frame_id in range(sequence.shape[0]):
+                new_sequence[frame_id, ...] = cv2.warpAffine(sequence[frame_id, ...], M[:2], dsize=self.size, borderValue=(114, 114, 114))
+        return new_sequence, M, s
+
+    def apply_bboxes(self, bboxes, M):
+        """
+        Apply affine to bboxes only.
+
+        Args:
+            bboxes (ndarray): list of bboxes, xyxy format, with shape (num_bboxes, 4).
+            M (ndarray): affine matrix.
+
+        Returns:
+            new_bboxes (ndarray): bboxes after affine, [num_bboxes, 4].
+        """
+        n = len(bboxes)
+        if n == 0:
+            return bboxes
+
+        xy = np.ones((n * 4, 3), dtype=bboxes.dtype)
+        xy[:, :2] = bboxes[:, [0, 1, 2, 3, 0, 3, 2, 1]].reshape(n * 4, 2)  # x1y1, x2y2, x1y2, x2y1
+        xy = xy @ M.T  # transform
+        xy = xy[:, :2].reshape(n, 8)  # perspective rescale or affine
+
+        # Create new boxes
+        x = xy[:, [0, 2, 4, 6]]
+        y = xy[:, [1, 3, 5, 7]]
+        return np.concatenate((x.min(1), y.min(1), x.max(1), y.max(1)), dtype=bboxes.dtype).reshape(4, n).T
+
+    def apply_segments(self, segments, M):
+        """
+        Apply affine to segments and generate new bboxes from segments.
+
+        Args:
+            segments (ndarray): list of segments, [num_samples, 500, 2].
+            M (ndarray): affine matrix.
+
+        Returns:
+            new_segments (ndarray): list of segments after affine, [num_samples, 500, 2].
+            new_bboxes (ndarray): bboxes after affine, [N, 4].
+        """
+        n, num = segments.shape[:2]
+        if n == 0:
+            return [], segments
+
+        xy = np.ones((n * num, 3), dtype=segments.dtype)
+        segments = segments.reshape(-1, 2)
+        xy[:, :2] = segments
+        xy = xy @ M.T  # transform
+        xy = xy[:, :2] / xy[:, 2:3]
+        segments = xy.reshape(n, -1, 2)
+        bboxes = np.stack([segment2box(xy, self.size[0], self.size[1]) for xy in segments], 0)
+        return bboxes, segments
+
+    def apply_keypoints(self, keypoints, M):
+        """
+        Apply affine to keypoints.
+
+        Args:
+            keypoints (ndarray): keypoints, [N, 17, 3].
+            M (ndarray): affine matrix.
+
+        Returns:
+            new_keypoints (ndarray): keypoints after affine, [N, 17, 3].
+        """
+        n, nkpt = keypoints.shape[:2]
+        if n == 0:
+            return keypoints
+        xy = np.ones((n * nkpt, 3), dtype=keypoints.dtype)
+        visible = keypoints[..., 2].reshape(n * nkpt, 1)
+        xy[:, :2] = keypoints[..., :2].reshape(n * nkpt, 2)
+        xy = xy @ M.T  # transform
+        xy = xy[:, :2] / xy[:, 2:3]  # perspective rescale or affine
+        out_mask = (xy[:, 0] < 0) | (xy[:, 1] < 0) | (xy[:, 0] > self.size[0]) | (xy[:, 1] > self.size[1])
+        visible[out_mask] = 0
+        return np.concatenate([xy, visible], axis=-1).reshape(n, nkpt, 3)
+
+    def __call__(self, labels):
+        """
+        Affine images and targets.
+
+        Args:
+            labels (dict): a dict of `bboxes`, `segments`, `keypoints`.
+        """
+        if self.pre_transform and 'mosaic_border' not in labels:
+            labels = self.pre_transform(labels)
+        labels.pop('ratio_pad', None)  # do not need ratio pad
+
+        sequence = labels['img']
+        cls = labels['cls']
+        instances = labels.pop('instances')
+        # Make sure the coord formats are right
+        instances.convert_bbox(format='xyxy')
+        instances.denormalize(*sequence.shape[1:3][::-1])
+
+        border = labels.pop('mosaic_border', self.border)
+        self.size = sequence.shape[2] + border[1] * 2, sequence.shape[1] + border[0] * 2  # w, h
+        # M is affine matrix
+        # scale for func:`box_candidates`
+        sequence, M, scale = self.affine_transform(sequence, border)
+
+        bboxes = self.apply_bboxes(instances.bboxes, M)
+
+        segments = instances.segments
+        keypoints = instances.keypoints
+        # Update bboxes if there are segments.
+        if len(segments):
+            bboxes, segments = self.apply_segments(segments, M)
+
+        if keypoints is not None:
+            keypoints = self.apply_keypoints(keypoints, M)
+        new_instances = Instances(bboxes, segments, keypoints, bbox_format='xyxy', normalized=False)
+        # Clip
+        new_instances.clip(*self.size)
+
+        # Filter instances
+        instances.scale(scale_w=scale, scale_h=scale, bbox_only=True)
+        # Make the bboxes have the same scale with new_bboxes
+        i = self.box_candidates(box1=instances.bboxes.T,
+                                box2=new_instances.bboxes.T,
+                                area_thr=0.01 if len(segments) else 0.10)
+        labels['instances'] = new_instances[i]
+        labels['cls'] = cls[i]
+        labels['img'] = sequence
+        labels['resized_shape'] = sequence.shape[1:3]
+        return labels
+
+    def box_candidates(self, box1, box2, wh_thr=2, ar_thr=100, area_thr=0.1, eps=1e-16):  # box1(4,n), box2(4,n)
+        # Compute box candidates: box1 before augment, box2 after augment, wh_thr (pixels), aspect_ratio_thr, area_ratio
+        w1, h1 = box1[2] - box1[0], box1[3] - box1[1]
+        w2, h2 = box2[2] - box2[0], box2[3] - box2[1]
+        ar = np.maximum(w2 / (h2 + eps), h2 / (w2 + eps))  # aspect ratio
+        return (w2 > wh_thr) & (h2 > wh_thr) & (w2 * h2 / (w1 * h1 + eps) > area_thr) & (ar < ar_thr)  # candidates
+
+
 class RandomHSV:
 
     def __init__(self, hgain=0.5, sgain=0.5, vgain=0.5) -> None:
@@ -640,6 +823,42 @@ class RandomHSV:
 
             im_hsv = cv2.merge((cv2.LUT(hue, lut_hue), cv2.LUT(sat, lut_sat), cv2.LUT(val, lut_val)))
             cv2.cvtColor(im_hsv, cv2.COLOR_HSV2BGR, dst=img)  # no return needed
+        return labels
+
+
+class RandomHSV3D:
+
+    def __init__(self, hgain=0.5, sgain=0.5, vgain=0.5) -> None:
+        self.hgain = hgain
+        self.sgain = sgain
+        self.vgain = vgain
+
+    def __call__(self, labels):
+        """Applies image HSV augmentation"""
+        sequence = labels['img']
+
+        if self.hgain or self.sgain or self.vgain:
+            r = np.random.uniform(-1, 1, 3) * [self.hgain, self.sgain, self.vgain] + 1  # random gains
+            for frame_id in range(sequence.shape[0]):
+                frame = sequence[frame_id, ...]
+
+                hue, sat, val = cv2.split(cv2.cvtColor(frame, cv2.COLOR_BGR2HSV))
+                dtype = frame.dtype  # uint8
+
+                x = np.arange(0, 256, dtype=r.dtype)
+                lut_hue = ((x * r[0]) % 180).astype(dtype)
+                lut_sat = np.clip(x * r[1], 0, 255).astype(dtype)
+                lut_val = np.clip(x * r[2], 0, 255).astype(dtype)
+
+                im_hsv = cv2.merge((cv2.LUT(hue, lut_hue), cv2.LUT(sat, lut_sat), cv2.LUT(val, lut_val)))
+                cv2.cvtColor(im_hsv, cv2.COLOR_HSV2BGR, dst=sequence[frame_id, ...])  # no return needed
+
+        """
+        cv2.imshow("randomHSV -2", labels['img'][-2, ...])
+        cv2.imshow("randomHSV -1", labels['img'][-1, ...])
+        cv2.waitKey(5000)
+        """
+
         return labels
 
 
@@ -691,6 +910,55 @@ class RandomFlip:
                 instances.keypoints = np.ascontiguousarray(instances.keypoints[:, self.flip_idx, :])
         labels['img'] = np.ascontiguousarray(img)
         labels['instances'] = instances
+        return labels
+
+
+class RandomFlip3D:
+    """Applies random horizontal or vertical flip to an image with a given probability."""
+
+    def __init__(self, p=0.5, direction='horizontal', flip_idx=None) -> None:
+        assert direction in ['horizontal', 'vertical'], f'Support direction `horizontal` or `vertical`, got {direction}'
+        assert 0 <= p <= 1.0
+
+        self.p = p
+        self.direction = direction
+        self.flip_idx = flip_idx
+
+    def __call__(self, labels):
+        """Resize image and padding for detection, instance segmentation, pose."""
+        sequence = labels['img']
+        instances = labels.pop('instances')
+        instances.convert_bbox(format='xywh')
+        h, w = sequence.shape[1:3]
+        h = 1 if instances.normalized else h
+        w = 1 if instances.normalized else w
+
+        # Flip up-down
+        if self.direction == 'vertical' and random.random() < self.p:
+            for frame_id in range(sequence.shape[0]):
+                sequence[frame_id, ...] = np.flipud(sequence[frame_id, ...])
+            instances.flipud(h)
+        if self.direction == 'horizontal' and random.random() < self.p:
+            for frame_id in range(sequence.shape[0]):
+                sequence[frame_id, ...] = np.fliplr(sequence[frame_id, ...])
+            instances.fliplr(w)
+            # For keypoints
+            if self.flip_idx is not None and instances.keypoints is not None:
+                instances.keypoints = np.ascontiguousarray(instances.keypoints[:, self.flip_idx, :])
+        labels['img'] = np.ascontiguousarray(sequence)
+        labels['instances'] = instances
+
+        """
+        display = labels['img'].copy()
+        for bbox in labels['instances'].bboxes:
+            point1 = (int(bbox[0] - bbox[2]/2), int(bbox[1]-bbox[3]/2))
+            point2 = (point1[0] + int(bbox[2]), point1[1] + int(bbox[3]))
+            display[-1, ...] = cv2.rectangle(display[-1, ...], point1, point2, (255, 0, 0), 3)
+
+        cv2.imshow("fliplr", display[-1, ...])
+        cv2.waitKey(5000)
+        """
+
         return labels
 
 
@@ -809,7 +1077,7 @@ class LetterBox3D(LetterBox):
         new_video = np.zeros((resized_video.shape[0],
                               resized_video.shape[1]+top+bottom,
                               resized_video.shape[2]+left+right,
-                              resized_video.shape[3]))
+                              resized_video.shape[3]), dtype=np.uint8)
         for frame_id in range(resized_video.shape[0]):
             new_video[frame_id, ...] = cv2.copyMakeBorder(resized_video[frame_id, ...],
                                                           top, bottom, left, right,
@@ -820,6 +1088,18 @@ class LetterBox3D(LetterBox):
             labels = self._update_labels(labels, ratio, dw, dh)
             labels['img'] = new_video
             labels['resized_shape'] = new_shape
+
+            """
+            display = labels['img'].copy()
+            for bbox in labels['instances'].bboxes:
+                point1 = (int(bbox[0]), int(bbox[1]))
+                point2 = (int(bbox[2]), int(bbox[3]))
+                display[-1, ...] = cv2.rectangle(display[-1, ...], point1, point2, (255, 0, 0), 3)
+
+            cv2.imshow("letterbox", display[-1, ...])
+            cv2.waitKey(5000)
+            """
+
             return labels
         else:
             return new_video
@@ -915,6 +1195,56 @@ class Albumentations:
             # TODO: add supports of segments and keypoints
             if self.transform and random.random() < self.p:
                 new = self.transform(image=im, bboxes=bboxes, class_labels=cls)  # transformed
+                if len(new['class_labels']) > 0:  # skip update if no bbox in new im
+                    labels['img'] = new['image']
+                    labels['cls'] = np.array(new['class_labels'])
+                    bboxes = np.array(new['bboxes'], dtype=np.float32)
+            labels['instances'].update(bboxes=bboxes)
+        return labels
+
+
+class Albumentations3D:
+
+    def __init__(self, p=1.0):
+        """Initialize the transform object for YOLO bbox formatted params."""
+        self.p = p
+        self.transform = None
+        prefix = colorstr('albumentations: ')
+        try:
+            import albumentations as A
+
+            check_version(A.__version__, '1.0.3', hard=True)  # version requirement
+
+            T = [
+                A.Blur(p=0.01),
+                A.MedianBlur(p=0.01),
+                A.ToGray(p=0.01),
+                A.CLAHE(p=0.01),
+                A.RandomBrightnessContrast(p=0.0),
+                A.RandomGamma(p=0.0),
+                A.ImageCompression(quality_lower=75, p=0.0)]  # transforms
+            self.transform = A.Compose(T, bbox_params=A.BboxParams(format='yolo', label_fields=['class_labels']))
+
+            LOGGER.info(prefix + ', '.join(f'{x}'.replace('always_apply=False, ', '') for x in T if x.p))
+        except ImportError:  # package not installed, skip
+            pass
+        except Exception as e:
+            LOGGER.info(f'{prefix}{e}')
+
+    def __call__(self, labels):
+        """Generates object detections and returns a dictionary with detection results."""
+        sequence = labels['img']
+        cls = labels['cls']
+        if len(cls):
+            labels['instances'].convert_bbox('xywh')
+            labels['instances'].normalize(*sequence.shape[1:3][::-1])
+            bboxes = labels['instances'].bboxes
+            if self.transform and random.random() < self.p:
+                for frame_id in range(sequence.shape[0] - 1):
+                    frame = sequence[frame_id, ...]
+                    new = self.transform(image=frame)  # transformed
+                    labels['img'] = new['image']
+                new = self.transform(image=sequence[-1], bboxes=bboxes, class_labels=cls)
                 if len(new['class_labels']) > 0:  # skip update if no bbox in new im
                     labels['img'] = new['image']
                     labels['cls'] = np.array(new['class_labels'])
@@ -1071,16 +1401,21 @@ def v8_3d_transforms(dataset, imgsz, hyp, stretch=False):
     """Convert images to a size suitable for YOLOv8 training."""
     pre_transform = Compose([
         Mosaic3D(dataset, imgsz=imgsz, p=hyp.mosaic),
-        LetterBox3D(new_shape=(imgsz, imgsz))
+        RandomPerspective3D(
+            degrees=hyp.degrees,
+            translate=hyp.translate,
+            scale=hyp.scale,
+            pre_transform=None if stretch else LetterBox3D(new_shape=(imgsz, imgsz)),
+        )
     ])
 
     return Compose([
         # MotionAugment(),
         pre_transform,
-        # Albumentations(p=0.0),
-        # RandomHSV(hgain=hyp.hsv_h, sgain=hyp.hsv_s, vgain=hyp.hsv_v),
-        # RandomFlip(direction='vertical', p=hyp.flipud),
-        # RandomFlip(direction='horizontal', p=hyp.fliplr)])  # transforms
+        # Albumentations3D(p=0.0),
+        RandomHSV3D(hgain=hyp.hsv_h, sgain=hyp.hsv_s, vgain=hyp.hsv_v),
+        RandomFlip3D(direction='vertical', p=hyp.flipud),
+        RandomFlip3D(direction='horizontal', p=hyp.fliplr)  # transforms
     ])
 
 

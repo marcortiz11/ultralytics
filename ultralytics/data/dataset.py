@@ -1,5 +1,5 @@
 # Ultralytics YOLO 🚀, AGPL-3.0 license
-import sys
+import random
 import math
 import contextlib
 from itertools import repeat
@@ -16,6 +16,8 @@ from ultralytics.utils import LOCAL_RANK, NUM_THREADS, TQDM, colorstr, is_dir_wr
 from .augment import Compose, Format, Format3D, Instances, LetterBox, LetterBox3D, classify_albumentations, classify_transforms, v8_transforms, v8_3d_transforms
 from .base import BaseDataset
 from .utils import HELP_URL, LOGGER, get_hash, img2label_paths, verify_image, verify_image_label
+
+from thermal_far.motion_module.background_subtraction import BackgroundSubtraction
 
 # Ultralytics dataset *.cache version, >= 1.0.0 for YOLOv8
 DATASET_CACHE_VERSION = '1.0.3'
@@ -192,12 +194,12 @@ class YOLODataset(BaseDataset):
 
 class YOLOVideoDataset(YOLODataset):
 
-    def __init__(self, *args, seq_length=12, data=None, use_segments=False, use_keypoints=False, **kwargs):
+    def __init__(self, *args, seq_length=12, step=1, data=None, use_segments=False, use_keypoints=False, **kwargs):
         self.seq_length = seq_length
+        self.step = step
         assert seq_length > 1, 'Sequence length should be > 1'
 
         super().__init__(*args, data=data, use_segments=use_segments, use_keypoints=use_keypoints, **kwargs)
-
     def build_transforms(self, hyp=None):
         if self.augment:
             hyp.mosaic = hyp.mosaic
@@ -248,7 +250,7 @@ class YOLOVideoDataset(YOLODataset):
 
     def __len__(self):
         """Returns the length of the labels list for the dataset."""
-        return len(self.labels) - self.seq_length
+        return (len(self.labels) // (self.seq_length * self.step)) - 1
 
     def __getitem__(self, index):
         """Returns transformed label information for given index."""
@@ -259,8 +261,10 @@ class YOLOVideoDataset(YOLODataset):
     def get_sequence(self, index):
         new_sequence = []
 
-        for frame_id in range(self.seq_length):
-            idx = index + frame_id
+        for frame_id in range(0,
+                              (self.seq_length * self.step),
+                              self.step):
+            idx = index*self.seq_length + frame_id
             label = self.get_image_and_label(idx)
             new_sequence.append(label)
 
