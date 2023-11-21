@@ -147,13 +147,13 @@ class SPPF3D(nn.Module):
 
     def forward(self, x):
         """Forward pass through Ghost Convolution block."""
-        ##print('sppf3d input:', x.shape)
+        #print(('sppf3d input:', x.shape)
         x = self.cv1(x)
         y1 = self.m(x)
         y2 = self.m(y1)
         y = self.cv2(torch.cat((x, y1, y2, self.m(y2)), 1))
-        ##print('sppf3d output:', y.shape)
-        ##print()
+        #print(('sppf3d output:', y.shape)
+        ###print(()
         return y
 
 
@@ -216,7 +216,6 @@ class C2f3D(nn.Module):
 
     def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
         super().__init__()
-        ##print('C2f3D params', 'c1', c1, 'c2', c2, 'n', n, 'shortcut', shortcut, 'g', g, 'e', e)
         self.c = int(c2 * e)  # hidden channels
         self.cv1 = Conv3D(c1, 2 * self.c, 1, 1, 0)
         self.cv2 = Conv3D((2 + n) * self.c, c2, 1, 1, 0)  # optional act=FReLU(c2)
@@ -224,12 +223,12 @@ class C2f3D(nn.Module):
 
     def forward(self, x):
         """Forward pass through C2f layer."""
-        #print('C2f3D input', x.shape)
+        #print(('C2f3D input', x.shape)
         y = list(self.cv1(x).chunk(2, 1))
         y.extend(m(y[-1]) for m in self.m)
         y = self.cv2(torch.cat(y, 1))
-        #print('C2f3D output', y.shape)
-        ##print()
+        #print(('C2f3D output', y.shape)
+        ###print(()
         return y
 
     def forward_split(self, x):

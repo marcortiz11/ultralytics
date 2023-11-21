@@ -43,7 +43,6 @@ class Detect(nn.Module):
     def forward(self, x):
         """Concatenates and returns predicted bounding boxes and class probabilities."""
         shape = x[0].shape  # BCHW
-        #print('Detect input', x[0].shape, x[1].shape, '\n')
         for i in range(self.nl):
             x[i] = torch.cat((self.cv2[i](x[i]), self.cv3[i](x[i])), 1)
         if self.training:
