@@ -197,9 +197,11 @@ class YOLOVideoDataset(YOLODataset):
     def __init__(self, *args, seq_length=12, step=1, data=None, use_segments=False, use_keypoints=False, **kwargs):
         self.seq_length = seq_length
         self.step = step
+        self.bs = BackgroundSubtraction()
         assert seq_length > 1, 'Sequence length should be > 1'
 
         super().__init__(*args, data=data, use_segments=use_segments, use_keypoints=use_keypoints, **kwargs)
+
     def build_transforms(self, hyp=None):
         if self.augment:
             hyp.mosaic = hyp.mosaic
@@ -260,12 +262,17 @@ class YOLOVideoDataset(YOLODataset):
 
     def get_sequence(self, index):
         new_sequence = []
+        # self.bs.change_scenario()
 
-        for frame_id in range(0,
-                              (self.seq_length * self.step),
-                              self.step):
-            idx = index*self.seq_length + frame_id
+        start_id = random.randint(0, self.seq_length-1)
+        for frame_id in range((start_id + self.seq_length) * self.step, start_id, -self.step):
+            idx = index * self.seq_length + frame_id
             label = self.get_image_and_label(idx)
+            """
+            ratio_change = self.bs.ratio_change(label['img'])
+            if ratio_change > 0.1:
+                label['img'] = label['img'] * 0  # Don't want it in the sequence
+            """
             new_sequence.append(label)
 
         # From list to arrays of sequences

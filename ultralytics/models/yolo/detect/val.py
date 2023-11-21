@@ -114,7 +114,7 @@ class DetectionValidator(BaseValidator):
 
             # Evaluate
             if nl:
-                height, width = batch['img'].shape[3:]
+                height, width = batch['img'].shape[2:]
                 tbox = ops.xywh2xyxy(bbox) * torch.tensor(
                     (width, height, width, height), device=self.device)  # target boxes
                 ops.scale_boxes(batch['img'][si].shape[1:], tbox, shape,

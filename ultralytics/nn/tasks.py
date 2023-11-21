@@ -297,7 +297,7 @@ class DetectionModel(BaseModel):
 class DetectionModel3D(BaseModel):
     """YOLOv8 detection model."""
 
-    def __init__(self, cfg='yolov8n.yaml', ch=3, d=8, nc=None, verbose=True):  # model, input channels, number of classes
+    def __init__(self, cfg='yolov8n.yaml', ch=3, seq_length=8, nc=None, verbose=True):  # model, input channels, number of classes
         super().__init__()
         self.yaml = cfg if isinstance(cfg, dict) else yaml_model_load(cfg)  # cfg dict
 
@@ -314,7 +314,7 @@ class DetectionModel3D(BaseModel):
         m = self.model[-1]  # Detect()
         if isinstance(m, (Detect, Segment, Pose)):
             s = 256  # 2x min stride
-            d = d
+            d = seq_length
             m.inplace = self.inplace
             forward = lambda x: self.forward(x)[0] if isinstance(m, (Segment, Pose)) else self.forward(x)
             random_input = torch.zeros(1, ch, d, s, s)
@@ -739,7 +739,6 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             if m is HGBlock:
                 args.insert(4, n)  # number of repeats
                 n = 1
-
         elif m is (nn.BatchNorm2d, nn.BatchNorm3d):
             args = [ch[f]]
         elif m is Concat:

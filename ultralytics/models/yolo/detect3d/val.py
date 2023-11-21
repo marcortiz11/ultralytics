@@ -117,7 +117,7 @@ class DetectionValidator(BaseValidator):
                 height, width = batch['img'].shape[3:]
                 tbox = ops.xywh2xyxy(bbox) * torch.tensor(
                     (width, height, width, height), device=self.device)  # target boxes
-                ops.scale_boxes(batch['img'][si].shape[1:], tbox, shape,
+                ops.scale_boxes(batch['img'][si].shape[2:], tbox, shape,
                                 ratio_pad=batch['ratio_pad'][si])  # native-space labels
                 labelsn = torch.cat((cls, tbox), 1)  # native-space labels
                 correct_bboxes = self._process_batch(predn, labelsn)

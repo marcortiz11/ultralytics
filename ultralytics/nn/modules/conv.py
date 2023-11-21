@@ -50,39 +50,45 @@ class Conv3D(nn.Module):
     def __init__(self, c1, c2, k=1, s=1, p=1, g=1, d=1, act=True):
         """Initialize Conv layer with given arguments including activation."""
         super().__init__()
-        self.conv = [c1, c2, k, s, p, g, d]
+        self.conv_params = [c1, c2, k, s, p, g, d]
+        self.conv = None
         self.bn = nn.BatchNorm3d(c2)
         self.act = self.default_act if act is True else act if isinstance(act, nn.Module) else nn.Identity()
 
+    @staticmethod
+    def dynamic_kernel_size(input_shape, kernel_size):
+        new_kernel = kernel_size.copy() if isinstance(kernel_size, list) else kernel_size
+        if isinstance(kernel_size, list):
+            for i, s in enumerate(kernel_size):
+                if s == -1:
+                    new_kernel[i] = input_shape[i + 2]
+        return new_kernel
+
     def forward(self, x):
         """Apply convolution, batch normalization and activation to input tensor."""
-        #print('Conv3D input', x.shape)
+        # print('Conv3D input', x.shape)
 
-        if isinstance(self.conv, list):
-            # Adjust kernel
-            new_kernel = []
-            if isinstance(self.conv[2], list):
-                for i, s in enumerate(self.conv[2]):
-                    if s == -1:
-                        new_kernel.append(x.shape[i + 2])
-                    else:
-                        new_kernel.append(s)
-            else:
-                new_kernel = self.conv[2]
-
-            self.conv = nn.Conv3d(self.conv[0], self.conv[1], new_kernel, stride=self.conv[3], padding=self.conv[4],
-                                  groups=self.conv[5], dilation=self.conv[6], bias=False)
+        if self.conv is None:
+            new_kernel = self.dynamic_kernel_size(x.shape, self.conv_params[2])
+            self.conv = nn.Conv3d(self.conv_params[0],
+                                  self.conv_params[1],
+                                  new_kernel,
+                                  stride=self.conv_params[3],
+                                  padding=self.conv_params[4],
+                                  groups=self.conv_params[5],
+                                  dilation=self.conv_params[6],
+                                  bias=False)
 
         y = self.act(self.bn(self.conv(x)))
 
-        #print('Conv3D output', y.shape)
+        # print('Conv3D output', y.shape)
         return y
 
     def forward_fuse(self, x):
         """Perform transposed convolution of 2D data."""
-        ##print('Conv3D input', x.shape)
+        # print('Conv3D input', x.shape)
         y = self.act(self.conv(x))
-        ##print('Conv3D output', y.shape)
+        # print('Conv3D output', y.shape)
         return y
 
 
@@ -336,7 +342,7 @@ class Concat(nn.Module):
     def forward(self, x):
         """Forward pass for the YOLOv8 mask Proto module."""
         # for x_elem in x:
-            #print('Concat input', x_elem.shape)
+            ##print('Concat input', x_elem.shape)
         return torch.cat(x, self.d)
 
 
@@ -350,9 +356,9 @@ class Upsample(nn.Module):
 
     def forward(self, x):
         """Forward pass for the YOLOv8 mask Proto module."""
-        #print('Upsample input', x.shape)
+        ##print('Upsample input', x.shape)
         y = self.upsample(x)
-        #print('Upsample output', y.shape)
+        ##print('Upsample output', y.shape)
         return y
 
 
@@ -366,9 +372,9 @@ class Squeeze(nn.Module):
 
     def forward(self, x):
         """Forward pass for the YOLOv8 mask Proto module."""
-        #print('Squeeze input', x.shape)
+        ##print('Squeeze input', x.shape)
         y = torch.squeeze(x, self.dim)
-        #print('Squeeze output', y.shape)
+        ##print('Squeeze output', y.shape)
         return y
 
 class ConvGRUCell(nn.Module):
@@ -406,8 +412,10 @@ class ConvGRUCell(nn.Module):
                               padding=self.padding,
                               bias=self.bias)
 
-    def init_hidden(self, batch_size):
-        return (torch.autograd.Variable(torch.zeros(batch_size, self.hidden_dim, self.height, self.width)).type(self.dtype))
+    def init_hidden(self, input):
+        size = input.shape
+        dtype = input.dtype
+        return torch.autograd.Variable(torch.zeros(size[0], self.hidden_dim, size[-2], size[-1]).type(dtype).to(input.device))
 
     def forward(self, input_tensor, h_cur):
         """
@@ -420,6 +428,8 @@ class ConvGRUCell(nn.Module):
         :return: h_next,
             next hidden state
         """
+
+        #print('GRU cell input:', input_tensor.shape)
 
         if self.height is None or self.width is None:
             self.height = input_tensor.shape[2]
@@ -438,12 +448,13 @@ class ConvGRUCell(nn.Module):
         cnm = torch.tanh(cc_cnm)
 
         h_next = (1 - update_gate) * h_cur + update_gate * cnm
+        #print('GRU cell output:', h_next.shape)
         return h_next
 
 
 class ConvGRU(nn.Module):
-    def __init__(self, c1, c2, kernel_size=3, num_layers=1,
-                 batch_first=False, bias=True, return_all_layers=False):
+    def __init__(self, c1, c2, kernel_size=(3, 3), num_layers=1,
+                 batch_first=True, bias=True, return_all_layers=False):
         """
         :param input_size: (int, int)
             Height and width of input tensor as (height, width).
@@ -476,7 +487,7 @@ class ConvGRU(nn.Module):
 
         self.height, self.width = (None, None)
         self.input_dim = c1
-        self.hidden_dim = c2
+        self.hidden_dim = hidden_dim
         self.kernel_size = kernel_size
         self.num_layers = num_layers
         self.batch_first = batch_first
@@ -503,25 +514,25 @@ class ConvGRU(nn.Module):
         """
         if not self.batch_first:
             # (t, b, c, h, w) -> (b, t, c, h, w)
-            input_tensor = input_tensor.permute(1, 0, 2, 3, 4)
+            input_tensor = input_tensor.permute(2, 1, 0, 3, 4)
 
         # Implement stateful ConvLSTM
         if hidden_state is not None:
             raise NotImplementedError()
         else:
-            hidden_state = self._init_hidden(batch_size=input_tensor.size(0))
+            hidden_state = self._init_hidden(input_tensor)
 
         layer_output_list = []
         last_state_list   = []
 
-        seq_len = input_tensor.size(1)
+        seq_len = input_tensor.size(2)
         cur_layer_input = input_tensor
 
         for layer_idx in range(self.num_layers):
             h = hidden_state[layer_idx]
             output_inner = []
             for t in range(seq_len):
-                h = self.cell_list[layer_idx](input_tensor=cur_layer_input[:, t, :, :, :],  # (b,t,c,h,w)
+                h = self.cell_list[layer_idx](input_tensor=cur_layer_input[:, :, t, :, :],  # (b,t,c,h,w)
                                               h_cur=h)
                 output_inner.append(h)
 
@@ -532,10 +543,10 @@ class ConvGRU(nn.Module):
             last_state_list.append([h])
 
         if not self.return_all_layers:
-            layer_output_list = layer_output_list[-1:]
+            layer_output_list = layer_output_list[-1][0]
             last_state_list   = last_state_list[-1:]
 
-        return layer_output_list, last_state_list
+        return layer_output_list
 
     def _init_hidden(self, batch_size):
         init_states = []

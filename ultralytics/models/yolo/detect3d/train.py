@@ -77,7 +77,7 @@ class DetectionTrainer(BaseTrainer):
 
     def get_model(self, cfg=None, weights=None, verbose=True, video=False, seq_length=12):
         """Return a YOLO detection model."""
-        model = DetectionModel3D(cfg, nc=self.data['nc'], verbose=verbose and RANK == -1)
+        model = DetectionModel3D(cfg, nc=self.data['nc'], seq_length=seq_length, verbose=verbose and RANK == -1)
         if weights:
             model.load(weights)
         return model
@@ -85,7 +85,7 @@ class DetectionTrainer(BaseTrainer):
     def get_validator(self):
         """Returns a DetectionValidator for YOLO model validation."""
         self.loss_names = 'box_loss', 'cls_loss', 'dfl_loss'
-        return yolo.detect.DetectionValidator(self.test_loader, save_dir=self.save_dir, args=copy(self.args))
+        return yolo.detect3d.DetectionValidator(self.test_loader, save_dir=self.save_dir, args=copy(self.args))
 
     def label_loss_items(self, loss_items=None, prefix='train'):
         """
@@ -106,11 +106,11 @@ class DetectionTrainer(BaseTrainer):
 
     def plot_training_samples(self, batch, ni):
         """Plots training samples with their annotations."""
-        plot_images(images=batch['img'],
+        plot_images(images=batch['img'][:, :, 0, :, :],
                     batch_idx=batch['batch_idx'],
                     cls=batch['cls'].squeeze(-1),
                     bboxes=batch['bboxes'],
-                    paths=batch['im_file'],
+                    paths=batch['im_file'][0],
                     fname=self.save_dir / f'train_batch{ni}.jpg',
                     on_plot=self.on_plot)
 
