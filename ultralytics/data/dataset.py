@@ -265,15 +265,17 @@ class YOLOVideoDataset(YOLODataset):
         # self.bs.change_scenario()
 
         start_id = random.randint(0, self.seq_length-1)
-        for frame_id in range((start_id + self.seq_length) * self.step, start_id, -self.step):
+        frame_id = start_id + (self.step * self.seq_length)
+        while len(new_sequence) < self.seq_length:
             idx = index * self.seq_length + frame_id
             label = self.get_image_and_label(idx)
-            """
+            '''
             ratio_change = self.bs.ratio_change(label['img'])
             if ratio_change > 0.1:
                 label['img'] = label['img'] * 0  # Don't want it in the sequence
-            """
+            '''
             new_sequence.append(label)
+            frame_id -= self.step
 
         # From list to arrays of sequences
         video_label = new_sequence[0]
