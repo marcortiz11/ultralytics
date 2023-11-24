@@ -194,10 +194,18 @@ class YOLODataset(BaseDataset):
 
 class YOLOVideoDataset(YOLODataset):
 
-    def __init__(self, *args, seq_length=12, step=1, data=None, use_segments=False, use_keypoints=False, **kwargs):
+    def __init__(self, *args,
+                 seq_length=12,
+                 step=1,
+                 data=None,
+                 use_segments=False,
+                 use_keypoints=False,
+                 mode="train",
+                 **kwargs):
         self.seq_length = seq_length
         self.step = step
         self.bs = BackgroundSubtraction()
+        self.mode = mode
         assert seq_length > 1, 'Sequence length should be > 1'
 
         super().__init__(*args, data=data, use_segments=use_segments, use_keypoints=use_keypoints, **kwargs)
@@ -252,7 +260,10 @@ class YOLOVideoDataset(YOLODataset):
 
     def __len__(self):
         """Returns the length of the labels list for the dataset."""
-        return (len(self.labels) // (self.seq_length * self.step)) - 1
+        if self.mode == 'train':
+            return (len(self.labels) // (self.seq_length * self.step)) - 1
+        else:
+            return len(self.labels) - self.seq_length
 
     def __getitem__(self, index):
         """Returns transformed label information for given index."""
@@ -262,18 +273,17 @@ class YOLOVideoDataset(YOLODataset):
 
     def get_sequence(self, index):
         new_sequence = []
-        # self.bs.change_scenario()
 
-        start_id = random.randint(0, self.seq_length-1)
+        start_id = random.randint(0, self.seq_length-1) if self.mode == 'train' else 0
         frame_id = start_id + (self.step * self.seq_length)
         while len(new_sequence) < self.seq_length:
-            idx = index * self.seq_length + frame_id
+
+            if self.mode == 'train':
+                idx = index * self.seq_length + frame_id
+            else:
+                idx = index + frame_id
+
             label = self.get_image_and_label(idx)
-            '''
-            ratio_change = self.bs.ratio_change(label['img'])
-            if ratio_change > 0.1:
-                label['img'] = label['img'] * 0  # Don't want it in the sequence
-            '''
             new_sequence.append(label)
             frame_id -= self.step
 

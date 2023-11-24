@@ -30,7 +30,7 @@ class DetectionPredictor(BasePredictor):
         not_tensor = not isinstance(im, torch.Tensor)
         if not_tensor:
             im = im[0]
-            im = im[..., ::-1].transpose((0, 4, 1, 2, 3))  # BGR to RGB, BHWC to BCHW, (n, 3, h, w)
+            im = im[..., ::-1].transpose((0, 3, 1, 2))  # BGR to RGB, BHWC to BCHW, (n, 3, h, w)
             im = np.ascontiguousarray(im)  # contiguous
             im = torch.from_numpy(im)
 
@@ -59,7 +59,7 @@ class DetectionPredictor(BasePredictor):
 
         # Warmup model
         if not self.done_warmup:
-            self.model.warmup(imgsz=(1 if self.model.pt or self.model.triton else self.dataset.bs, 3, 12, *self.imgsz))
+            self.model.warmup(imgsz=(1 if self.model.pt or self.model.triton else self.dataset.bs, 3, *self.imgsz))
             self.done_warmup = True
 
         self.seen, self.windows, self.batch, profilers = 0, [], None, (ops.Profile(), ops.Profile(), ops.Profile())
@@ -140,7 +140,7 @@ class DetectionPredictor(BasePredictor):
         results = []
         for i, pred in enumerate(preds):
             orig_img = orig_imgs[i]
-            pred[:, :4] = ops.scale_boxes(img.shape[3:], pred[:, :4], orig_img.shape[2:4])
+            pred[:, :4] = ops.scale_boxes(img.shape[2:], pred[:, :4], orig_img.shape[1:3])
             img_path = self.batch[0][i]
             results.append(Results(orig_img, path=img_path, names=self.model.names, boxes=pred))
         return results

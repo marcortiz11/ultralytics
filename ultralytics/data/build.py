@@ -111,7 +111,8 @@ def build_yolovideo_dataset(cfg, img_path, batch, data, mode='train', rect=False
         data=data,
         motion=motion,
         seq_length=seq_length,
-        fraction=cfg.fraction if mode == 'train' else 1.0)
+        fraction=cfg.fraction if mode == 'train' else 1.0,
+        mode=mode)
 
 
 def build_dataloader(dataset, batch, workers, shuffle=True, rank=-1):
