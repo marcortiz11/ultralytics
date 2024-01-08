@@ -8,6 +8,8 @@ import cv2
 import numpy as np
 import torch
 import torchvision.transforms as T
+import torchvision.transforms.functional as F
+from PIL import Image
 
 from ultralytics.utils import LOGGER, colorstr
 from ultralytics.utils.checks import check_version
@@ -759,6 +761,17 @@ class Format:
         return masks, instances, cls
 
 
+class SquarePad:
+    def __call__(self, image):
+        h, w = image.shape[:2]
+        max_wh = np.max([w, h])
+        hp = int((max_wh - w) / 2)
+        vp = int((max_wh - h) / 2)
+        padding = (hp, vp, hp, vp)
+        img_padding = F.pad(Image.fromarray(image), padding, 0, 'constant')
+        return np.array(img_padding)
+
+
 def v8_transforms(dataset, imgsz, hyp, stretch=False):
     """Convert images to a size suitable for YOLOv8 training."""
     pre_transform = Compose([
@@ -796,9 +809,10 @@ def classify_transforms(size=224, mean=(0.0, 0.0, 0.0), std=(1.0, 1.0, 1.0)):  #
     if not isinstance(size, int):
         raise TypeError(f'classify_transforms() size {size} must be integer, not (list, tuple)')
     if any(mean) or any(std):
-        return T.Compose([CenterCrop(size), ToTensor(), T.Normalize(mean, std, inplace=True)])
+        # return T.Compose([CenterCrop(size), ToTensor(), T.Normalize(mean, std, inplace=True)])
+        return T.Compose([SquarePad(), ToTensor(), T.Resize((size, size), antialias=True), T.Normalize(mean, std, inplace=True)])
     else:
-        return T.Compose([CenterCrop(size), ToTensor()])
+        return T.Compose([SquarePad(), ToTensor(), T.Resize((size, size), antialias=True)])
 
 
 def hsv2colorjitter(h, s, v):
@@ -816,7 +830,9 @@ def classify_albumentations(
         hsv_s=0.7,  # image HSV-Saturation augmentation (fraction)
         hsv_v=0.4,  # image HSV-Value augmentation (fraction)
         mean=(0.0, 0.0, 0.0),  # IMAGENET_MEAN
-        std=(1.0, 1.0, 1.0),  # IMAGENET_STD
+        std=(1.0, 1.0, 1.0),  # IMAGENET_STD,
+        cutout_p=0.0,  # Cutout augmentation,
+        rotate_p=0.0,  # Rotate augmentation
         auto_aug=False,
 ):
     """YOLOv8 classification Albumentations (optional, only used if package is installed)."""
@@ -827,7 +843,8 @@ def classify_albumentations(
 
         check_version(A.__version__, '1.0.3', hard=True)  # version requirement
         if augment:  # Resize and crop
-            T = [A.RandomResizedCrop(height=size, width=size, scale=scale)]
+            T = []
+            # T = [A.RandomResizedCrop(height=size, width=size, scale=scale)]
             if auto_aug:
                 # TODO: implement AugMix, AutoAug & RandAug in albumentations
                 LOGGER.info(f'{prefix}auto augmentations are currently not supported')
@@ -838,9 +855,14 @@ def classify_albumentations(
                     T += [A.VerticalFlip(p=vflip)]
                 if any((hsv_h, hsv_s, hsv_v)):
                     T += [A.ColorJitter(*hsv2colorjitter(hsv_h, hsv_s, hsv_v))]  # brightness, contrast, saturation, hue
+                if cutout_p > 0:
+                    T += [A.CoarseDropout(max_holes=12, p=cutout_p)]
+                if rotate_p > 0:
+                    pass # T += [A.Rotate(limit=30, p=rotate_p)]
         else:  # Use fixed crop for eval set (reproducibility)
             T = [A.SmallestMaxSize(max_size=size), A.CenterCrop(height=size, width=size)]
-        T += [A.Normalize(mean=mean, std=std), ToTensorV2()]  # Normalize and convert to Tensor
+        # T += [A.Normalize(mean=mean, std=std), ToTensorV2()]  # Normalize and convert to Tensor
+        T += [A.CLAHE(p=0.1)]
         LOGGER.info(prefix + ', '.join(f'{x}'.replace('always_apply=False, ', '') for x in T if x.p))
         return A.Compose(T)
 

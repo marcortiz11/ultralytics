@@ -1,5 +1,6 @@
 # Ultralytics YOLO 🚀, AGPL-3.0 license
-import sys
+import csv
+import os
 import contextlib
 from itertools import repeat
 from multiprocessing.pool import ThreadPool
@@ -8,6 +9,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 import torch
+from torch.utils.data import Dataset
 import torchvision
 
 from ultralytics.utils import LOCAL_RANK, NUM_THREADS, TQDM, colorstr, is_dir_writeable
@@ -256,6 +258,109 @@ class ClassificationDataset(torchvision.datasets.ImageFolder):
 
     def __len__(self) -> int:
         return len(self.samples)
+
+    def verify_images(self):
+        """Verify all images in dataset."""
+        desc = f'{self.prefix}Scanning {self.root}...'
+        path = Path(self.root).with_suffix('.cache')  # *.cache file path
+
+        with contextlib.suppress(FileNotFoundError, AssertionError, AttributeError):
+            cache = load_dataset_cache_file(path)  # attempt to load a *.cache file
+            assert cache['version'] == DATASET_CACHE_VERSION  # matches current version
+            assert cache['hash'] == get_hash([x[0] for x in self.samples])  # identical hash
+            nf, nc, n, samples = cache.pop('results')  # found, missing, empty, corrupt, total
+            if LOCAL_RANK in (-1, 0):
+                d = f'{desc} {nf} images, {nc} corrupt'
+                TQDM(None, desc=d, total=n, initial=n)
+                if cache['msgs']:
+                    LOGGER.info('\n'.join(cache['msgs']))  # display warnings
+            return samples
+
+        # Run scan if *.cache retrieval failed
+        nf, nc, msgs, samples, x = 0, 0, [], [], {}
+        with ThreadPool(NUM_THREADS) as pool:
+            results = pool.imap(func=verify_image, iterable=zip(self.samples, repeat(self.prefix)))
+            pbar = TQDM(results, desc=desc, total=len(self.samples))
+            for sample, nf_f, nc_f, msg in pbar:
+                if nf_f:
+                    samples.append(sample)
+                if msg:
+                    msgs.append(msg)
+                nf += nf_f
+                nc += nc_f
+                pbar.desc = f'{desc} {nf} images, {nc} corrupt'
+            pbar.close()
+        if msgs:
+            LOGGER.info('\n'.join(msgs))
+        x['hash'] = get_hash([x[0] for x in self.samples])
+        x['results'] = nf, nc, len(samples), samples
+        x['msgs'] = msgs  # warnings
+        save_dataset_cache_file(self.prefix, path, x)
+        return samples
+
+
+class MultilabelClassificationDataset(Dataset):
+    def __init__(self, root, args, augment=False, cache=False, prefix=''):
+
+        self.root = root
+        self.args = args
+        self.augment = augment
+        self.cache_ram = cache is True or cache == 'ram'
+        self.cache_disk = cache == 'disk'
+        self.prefix = prefix
+
+        self.read_samples()
+        self.samples = self.verify_images()  # filter out bad images
+        self.samples = [list(x) + [Path(x[0]).with_suffix('.npy'), None] for x in self.samples]  # file, index, npy, im
+
+        self.torch_transforms = classify_transforms(args.imgsz)
+        self.album_transforms = classify_albumentations(
+            augment=augment,
+            size=args.imgsz,
+            scale=(1.0 - args.scale, 1.0),  # (0.08, 1.0)
+            hflip=args.fliplr,
+            vflip=args.flipud,
+            hsv_h=args.hsv_h,  # HSV-Hue augmentation (fraction)
+            hsv_s=args.hsv_s,  # HSV-Saturation augmentation (fraction)
+            hsv_v=args.hsv_v,  # HSV-Value augmentation (fraction)
+            mean=(0.0, 0.0, 0.0),  # IMAGENET_MEAN
+            std=(1.0, 1.0, 1.0),  # IMAGENET_STD
+            cutout_p=0.2,
+            rotate_p=0.2,
+            auto_aug=False) if augment else None
+
+    def read_samples(self):
+        self.samples = []
+        with open(os.path.join(self.root), newline='') as csvfile:
+            samples_csv = csv.reader(csvfile, delimiter=',')
+            next(samples_csv, None)  # Skip header
+            for sample_csv in samples_csv:
+                sample = (sample_csv[0], tuple(sample_csv[1:]))
+                self.samples.append(sample)
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, index):
+        """Returns subset of data and targets corresponding to given indices."""
+        f, j, fn, im = self.samples[index]  # filename, index, filename.with_suffix('.npy'), image
+        if self.cache_ram and im is None:
+            im = self.samples[index][3] = cv2.imread(f)
+        elif self.cache_disk:
+            if not fn.exists():  # load npy
+                np.save(fn.as_posix(), cv2.imread(f), allow_pickle=False)
+            im = np.load(fn)
+        else:  # read image
+            im = cv2.imread(f)  # BGR
+        if self.album_transforms:
+            sample = self.album_transforms(image=cv2.cvtColor(im, cv2.COLOR_BGR2RGB))['image']
+            sample = self.torch_transforms(sample.astype(np.uint8))
+        else:
+            sample = self.torch_transforms(im)
+        #img_transform = sample.permute(1, 2, 0).detach().cpu().numpy()*255
+        #cv2.imshow('test', img_transform.astype(np.uint8))
+        #cv2.waitKey(5000)
+        return {'img': sample, 'cls': torch.tensor([float(x) for x in j])}
 
     def verify_images(self):
         """Verify all images in dataset."""

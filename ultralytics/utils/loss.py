@@ -3,6 +3,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torchvision.ops
 
 from ultralytics.utils.metrics import OKS_SIGMA
 from ultralytics.utils.ops import crop_mask, xywh2xyxy, xyxy2xywh
@@ -394,3 +395,24 @@ class v8ClassificationLoss:
         loss = torch.nn.functional.cross_entropy(preds, batch['cls'], reduction='sum') / 64
         loss_items = loss.detach()
         return loss, loss_items
+
+
+class v8MultilabelClassificationLoss:
+    """Criterion class for computing training losses."""
+    def __init__(self, alpha=0.75, gamma=1.5):
+        self.alpha = alpha
+        self.gamma = gamma
+
+    def __call__(self, preds, batch):
+        # Implementation of focal loss
+        positive_targets = batch['cls']
+        bce_loss_pos = F.binary_cross_entropy_with_logits(preds, positive_targets, reduction='none')
+
+        # Calculate focal loss for both classes
+        pt_pos = torch.exp(-bce_loss_pos)
+        focal_loss_pos = self.alpha * (1 - pt_pos) ** self.gamma * bce_loss_pos
+
+        # Sum the losses over both classes
+        focal_loss = torch.mean(torch.sum(focal_loss_pos, dim=1))
+        loss_items = focal_loss.detach()
+        return focal_loss, loss_items

@@ -13,6 +13,7 @@ from pathlib import Path
 from tarfile import is_tarfile
 
 import cv2
+import pandas as pd
 import numpy as np
 from PIL import Image, ImageOps
 
@@ -384,6 +385,67 @@ def check_cls_dataset(dataset, split=''):
                 LOGGER.warning(f'{prefix} found {nf} images in {nd} classes: ERROR ❌️ requires {nc} classes, not {nd}')
             else:
                 LOGGER.info(f'{prefix} found {nf} images in {nd} classes ✅ ')
+
+    return {'train': train_set, 'val': val_set, 'test': test_set, 'nc': nc, 'names': names}
+
+
+def check_multilabel_cls_dataset(dataset, split=''):
+    """
+    Checks a classification dataset such as Imagenet.
+
+    This function accepts a `dataset` name and attempts to retrieve the corresponding dataset information.
+    If the dataset is not found locally, it attempts to download the dataset from the internet and save it locally.
+
+    Args:
+        dataset (str | Path): The name of the dataset.
+        split (str, optional): The split of the dataset. Either 'val', 'test', or ''. Defaults to ''.
+
+    Returns:
+        (dict): A dictionary containing the following keys:
+            - 'train' (Path): The directory path containing the training set of the dataset.
+            - 'val' (Path): The directory path containing the validation set of the dataset.
+            - 'test' (Path): The directory path containing the test set of the dataset.
+            - 'nc' (int): The number of classes in the dataset.
+            - 'names' (dict): A dictionary of class names in the dataset.
+    """
+
+    # Download (optional if dataset=https://file.zip is passed directly)
+    if str(dataset).startswith(('http:/', 'https:/')):
+        dataset = safe_download(dataset, dir=DATASETS_DIR, unzip=True, delete=False)
+
+    dataset = Path(dataset)
+    data_dir = (dataset if dataset.is_dir() else (DATASETS_DIR / dataset)).resolve()
+
+    train_set = data_dir / 'train.csv'
+    val_set = data_dir / 'val.csv' if (data_dir / 'val.csv').exists() else data_dir / 'validation.csv' if \
+        (data_dir / 'validation.csv').exists() else None  # data/test or data/val
+    test_set = data_dir / 'test.csv' if (data_dir / 'test.csv').exists() else None  # data/val or data/test
+    if split == 'val' and not val_set:
+        LOGGER.warning("WARNING ⚠️ Dataset 'split=val' not found, using 'split=test' instead.")
+    elif split == 'test' and not test_set:
+        LOGGER.warning("WARNING ⚠️ Dataset 'split=test' not found, using 'split=val' instead.")
+
+    df = pd.read_csv(train_set, sep=",", header=0)
+    names = df.columns.values.tolist()[1:]
+    nc = len(names)
+    names = dict(enumerate(sorted(names)))
+
+    # Print to console
+    for k, v in {'train': train_set, 'val': val_set, 'test': test_set}.items():
+        prefix = f'{colorstr(f"{k}:")} {v}...'
+        if v is None:
+            LOGGER.info(prefix)
+        else:
+            files = df.iloc[:, 0].tolist()
+            files = [path for path in files if path.split('.')[-1].lower() in IMG_FORMATS]
+            nf = len(files)  # number of files
+            if nf == 0:
+                if k == 'train':
+                    raise FileNotFoundError(emojis(f"{dataset} '{k}:' no training images found ❌ "))
+                else:
+                    LOGGER.warning(f'{prefix} found {nf} images in {nd} classes: WARNING ⚠️ no images found')
+            else:
+                LOGGER.info(f'{prefix} found {nf} images in {nc} classes ✅ ')
 
     return {'train': train_set, 'val': val_set, 'test': test_set, 'nc': nc, 'names': names}
 

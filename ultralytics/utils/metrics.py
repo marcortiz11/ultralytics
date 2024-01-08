@@ -967,3 +967,60 @@ class ClassifyMetrics(SimpleClass):
     def keys(self):
         """Returns a list of keys for the results_dict property."""
         return ['metrics/accuracy_top1', 'metrics/accuracy_top5']
+
+
+class MultilabelClassifyMetrics(SimpleClass):
+    """
+    Class for computing classification metrics including top-1 and top-5 accuracy.
+
+    Attributes:
+        top1 (float): The top-1 accuracy.
+        top5 (float): The top-5 accuracy.
+        speed (Dict[str, float]): A dictionary containing the time taken for each step in the pipeline.
+
+    Properties:
+        fitness (float): The fitness of the model, which is equal to top-5 accuracy.
+        results_dict (Dict[str, Union[float, str]]): A dictionary containing the classification metrics and fitness.
+        keys (List[str]): A list of keys for the results_dict.
+
+    Methods:
+        process(targets, pred): Processes the targets and predictions to compute classification metrics.
+    """
+
+    def __init__(self) -> None:
+        self.hamming = 0
+        self.precision = 0
+        self.recall = 0
+        self.speed = {'preprocess': 0.0, 'inference': 0.0, 'loss': 0.0, 'postprocess': 0.0}
+
+    def process(self, targets, pred):
+        """Target classes and predicted classes."""
+        pred, targets = torch.cat(pred), torch.cat(targets)
+
+        # Hamming score
+        correct_row = torch.sum(torch.eq(pred, targets), dim=0)
+        hamming_row = torch.div(correct_row, targets.shape[0])
+        hamming = torch.mean(hamming_row)
+        self.hamming = hamming
+
+        # Precision and recall
+        num_true_positives = torch.sum(pred * targets, dim=1)
+        num_positives = torch.sum(pred, dim=1) + 1e-6
+        num_true = torch.sum(targets, dim=1) + 1e-6
+        self.precision = torch.mean(num_true_positives / num_positives)
+        self.recall = torch.mean(num_true_positives / num_true)
+
+    @property
+    def fitness(self):
+        """Returns mean of top-1 and top-5 accuracies as fitness score."""
+        return self.hamming, self.precision, self.recall
+
+    @property
+    def results_dict(self):
+        """Returns a dictionary with model's performance metrics and fitness score."""
+        return dict(zip(self.keys, [self.hamming, self.precision, self.recall]))
+
+    @property
+    def keys(self):
+        """Returns a list of keys for the results_dict property."""
+        return ['metrics/hamming', 'metrics/precision', 'metrics/recall']

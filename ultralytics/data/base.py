@@ -21,8 +21,6 @@ from ultralytics.utils import DEFAULT_CFG, LOCAL_RANK, LOGGER, NUM_THREADS, TQDM
 from .utils import HELP_URL, IMG_FORMATS
 
 sys.path.insert(0, "/home/lava/Documents/thermal_far/")
-from thermal_far.motion_module.motion_pipeline import MotionPipeline
-from thermal_far import motion_module
 
 
 class BaseDataset(Dataset):
