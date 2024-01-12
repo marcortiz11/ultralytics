@@ -294,6 +294,9 @@ class BaseTrainer:
             self._setup_ddp(world_size)
         self._setup_train(world_size)
 
+        # Clip gradients to avoid exploding gradients
+        torch.nn.utils.clip_grad_norm(self.model.parameters(), max_norm=1.0)
+
         self.epoch_time = None
         self.epoch_time_start = time.time()
         self.train_time_start = time.time()
@@ -550,10 +553,11 @@ class BaseTrainer:
     def save_metrics(self, metrics):
         """Saves training metrics to a CSV file."""
         keys, vals = list(metrics.keys()), list(metrics.values())
+        vals2 = [f"{x:2.2f}" if isinstance(x, (int, float)) else str(x) for x in vals]
         n = len(metrics) + 1  # number of cols
-        s = '' if self.csv.exists() else (('%23s,' * n % tuple(['epoch'] + keys)).rstrip(',') + '\n')  # header
+        s = '' if self.csv.exists() else (('%50s,' * n % tuple(['epoch'] + keys)).rstrip(',') + '\n')  # header
         with open(self.csv, 'a') as f:
-            f.write(s + ('%23.5g,' * n % tuple([self.epoch + 1] + vals)).rstrip(',') + '\n')
+            f.write(s + ('%50s,' * n % tuple([f"{self.epoch + 1}"] + vals2)).rstrip(',') + '\n')
 
     def plot_metrics(self):
         """Plot and display metrics visually."""

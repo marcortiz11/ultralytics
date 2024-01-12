@@ -397,22 +397,34 @@ class v8ClassificationLoss:
         return loss, loss_items
 
 
+"""
 class v8MultilabelClassificationLoss:
-    """Criterion class for computing training losses."""
-    def __init__(self, alpha=0.75, gamma=1.5):
+
+    def __call__(self, preds, batch):
+        bce_loss_pos = F.binary_cross_entropy_with_logits(preds, batch['cls'], reduction='none')
+        # bce_loss = torch.mean(torch.sum(bce_loss_pos, dim=1))
+        bce_loss = torch.mean(bce_loss_pos)
+        loss_items = bce_loss.detach()
+        return bce_loss, loss_items
+"""
+
+
+class v8MultilabelClassificationLoss:
+
+    def __init__(self, alpha=1.5, gamma=2.5):
         self.alpha = alpha
         self.gamma = gamma
 
     def __call__(self, preds, batch):
-        # Implementation of focal loss
-        positive_targets = batch['cls']
-        bce_loss_pos = F.binary_cross_entropy_with_logits(preds, positive_targets, reduction='none')
+        targets = batch['cls']
+        p = torch.nn.functional.sigmoid(preds)
+        log1 = torch.log(p)
+        log2 = torch.log(1-p)
+        focal_loss_positives = - self.alpha * targets * (1 - p) ** self.gamma * log1
+        focal_loss_negatives = - (1 - targets) * p ** self.gamma * log2
+        focal_loss = focal_loss_positives + focal_loss_negatives
 
-        # Calculate focal loss for both classes
-        pt_pos = torch.exp(-bce_loss_pos)
-        focal_loss_pos = self.alpha * (1 - pt_pos) ** self.gamma * bce_loss_pos
-
-        # Sum the losses over both classes
-        focal_loss = torch.mean(torch.sum(focal_loss_pos, dim=1))
+        # Reduce
+        focal_loss = torch.mean(torch.sum(focal_loss, dim=1))
         loss_items = focal_loss.detach()
         return focal_loss, loss_items

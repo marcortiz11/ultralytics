@@ -255,7 +255,7 @@ class ChannelAttention(nn.Module):
 class SpatialAttention(nn.Module):
     """Spatial-attention module."""
 
-    def __init__(self, kernel_size=7):
+    def __init__(self, kernel_size=3):
         """Initialize Spatial-attention module with kernel size argument."""
         super().__init__()
         assert kernel_size in (3, 7), 'kernel size must be 3 or 7'
@@ -271,7 +271,7 @@ class SpatialAttention(nn.Module):
 class CBAM(nn.Module):
     """Convolutional Block Attention Module."""
 
-    def __init__(self, c1, kernel_size=7):  # ch_in, kernels
+    def __init__(self, c1, kernel_size=3):  # ch_in, kernels
         super().__init__()
         self.channel_attention = ChannelAttention(c1)
         self.spatial_attention = SpatialAttention(kernel_size)

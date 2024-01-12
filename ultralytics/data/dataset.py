@@ -14,7 +14,7 @@ import torchvision
 
 from ultralytics.utils import LOCAL_RANK, NUM_THREADS, TQDM, colorstr, is_dir_writeable
 
-from .augment import Compose, Format, Instances, LetterBox, classify_albumentations, classify_transforms, v8_transforms
+from .augment import Compose, Format, Instances, LetterBox, multilabel_classify_augmentations, v8_transforms
 from .base import BaseDataset
 from .utils import HELP_URL, LOGGER, get_hash, img2label_paths, verify_image, verify_image_label
 
@@ -313,8 +313,8 @@ class MultilabelClassificationDataset(Dataset):
         self.samples = self.verify_images()  # filter out bad images
         self.samples = [list(x) + [Path(x[0]).with_suffix('.npy'), None] for x in self.samples]  # file, index, npy, im
 
-        self.torch_transforms = classify_transforms(args.imgsz)
-        self.album_transforms = classify_albumentations(
+        self.transform = multilabel_classify_augmentations(
+            self,
             augment=augment,
             size=args.imgsz,
             scale=(1.0 - args.scale, 1.0),  # (0.08, 1.0)
@@ -325,23 +325,34 @@ class MultilabelClassificationDataset(Dataset):
             hsv_v=args.hsv_v,  # HSV-Value augmentation (fraction)
             mean=(0.0, 0.0, 0.0),  # IMAGENET_MEAN
             std=(1.0, 1.0, 1.0),  # IMAGENET_STD
-            cutout_p=0.2,
-            rotate_p=0.2,
-            auto_aug=False) if augment else None
+            cutout_p=0.1,
+            rotate_p=0.1,
+            mixup=0.1)
 
     def read_samples(self):
         self.samples = []
+        sample_abspath = os.path.dirname(self.root)
         with open(os.path.join(self.root), newline='') as csvfile:
             samples_csv = csv.reader(csvfile, delimiter=',')
             next(samples_csv, None)  # Skip header
             for sample_csv in samples_csv:
-                sample = (sample_csv[0], tuple(sample_csv[1:]))
+                sample = (os.path.join(sample_abspath, sample_csv[0]), tuple(sample_csv[1:]))
                 self.samples.append(sample)
 
     def __len__(self):
         return len(self.samples)
 
     def __getitem__(self, index):
+        """Returns subset of data and targets corresponding to given indices."""
+        sample = self.get_image_and_label(index)
+        transformed_sample = self.transform(sample)
+
+        #img_transform = sample.permute(1, 2, 0).detach().cpu().numpy()*255
+        #cv2.imshow('test', img_transform.astype(np.uint8))
+        #cv2.waitKey(5000)
+        return transformed_sample
+
+    def get_image_and_label(self, index):
         """Returns subset of data and targets corresponding to given indices."""
         f, j, fn, im = self.samples[index]  # filename, index, filename.with_suffix('.npy'), image
         if self.cache_ram and im is None:
@@ -352,15 +363,12 @@ class MultilabelClassificationDataset(Dataset):
             im = np.load(fn)
         else:  # read image
             im = cv2.imread(f)  # BGR
-        if self.album_transforms:
-            sample = self.album_transforms(image=cv2.cvtColor(im, cv2.COLOR_BGR2RGB))['image']
-            sample = self.torch_transforms(sample.astype(np.uint8))
-        else:
-            sample = self.torch_transforms(im)
-        #img_transform = sample.permute(1, 2, 0).detach().cpu().numpy()*255
-        #cv2.imshow('test', img_transform.astype(np.uint8))
-        #cv2.waitKey(5000)
-        return {'img': sample, 'cls': torch.tensor([float(x) for x in j])}
+
+        sample = {
+            'img': im,
+            'cls': [float(x) for x in j]
+        }
+        return sample
 
     def verify_images(self):
         """Verify all images in dataset."""

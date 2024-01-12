@@ -422,7 +422,7 @@ def plot_images(images,
             annotator.text((x + 5, y + 5), text=Path(paths[i]).name[:40], txt_color=(220, 220, 220))  # filenames
         if len(cls) > 0:
             idx = batch_idx == i
-            classes = cls[idx].astype('int')
+            classes = [i for i, x in enumerate(cls[idx][0]) if x]
 
             if len(bboxes):
                 boxes = ops.xywh2xyxy(bboxes[idx, :4]).T
@@ -445,10 +445,12 @@ def plot_images(images,
                         label = f'{c}' if labels else f'{c} {conf[j]:.1f}'
                         annotator.box_label(box, label, color=color)
             elif len(classes):
+                text = ""
+                color = colors(0)
                 for c in classes:
-                    color = colors(c)
                     c = names.get(c, c) if names else c
-                    annotator.text((x, y), f'{c}', txt_color=color, box_style=True)
+                    text += f"{c} "
+                annotator.text((x, y), text, txt_color=color, box_style=True)
 
             # Plot keypoints
             if len(kpts):

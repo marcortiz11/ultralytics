@@ -991,11 +991,17 @@ class MultilabelClassifyMetrics(SimpleClass):
         self.hamming = 0
         self.precision = 0
         self.recall = 0
+        self.precision_per_class = None
+        self.recall_per_class = None
         self.speed = {'preprocess': 0.0, 'inference': 0.0, 'loss': 0.0, 'postprocess': 0.0}
 
     def process(self, targets, pred):
         """Target classes and predicted classes."""
         pred, targets = torch.cat(pred), torch.cat(targets)
+
+        if self.precision_per_class is None:
+            self.precision_per_class = [0] * targets.shape[-1]
+            self.recall_per_class = [0] * targets.shape[-1]
 
         # Hamming score
         correct_row = torch.sum(torch.eq(pred, targets), dim=0)
@@ -1010,17 +1016,24 @@ class MultilabelClassifyMetrics(SimpleClass):
         self.precision = torch.mean(num_true_positives / num_positives)
         self.recall = torch.mean(num_true_positives / num_true)
 
+        # Precision and recall per class
+        num_true_positives = torch.sum(pred * targets, dim=0)
+        num_positives = torch.sum(pred, dim=0) + 1e-6
+        num_true = torch.sum(targets, dim=0) + 1e-6
+        self.precision_per_class = num_true_positives / num_positives
+        self.recall_per_class = num_true_positives / num_true
+
     @property
     def fitness(self):
         """Returns mean of top-1 and top-5 accuracies as fitness score."""
-        return self.hamming, self.precision, self.recall
+        return self.precision * self.recall
 
     @property
     def results_dict(self):
         """Returns a dictionary with model's performance metrics and fitness score."""
-        return dict(zip(self.keys, [self.hamming, self.precision, self.recall]))
+        return dict(zip(self.keys + ['fitness'], [self.hamming, self.precision, self.recall, self.precision_per_class, self.recall_per_class, self.fitness]))
 
     @property
     def keys(self):
         """Returns a list of keys for the results_dict property."""
-        return ['metrics/hamming', 'metrics/precision', 'metrics/recall']
+        return ['metrics/hamming', 'metrics/precision', 'metrics/recall', 'metrics/precision_class', 'metrics/recall_class']

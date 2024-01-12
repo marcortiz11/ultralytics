@@ -11,6 +11,9 @@ import torchvision.transforms as T
 import torchvision.transforms.functional as F
 from PIL import Image
 
+import albumentations as A
+from albumentations.pytorch import ToTensorV2
+
 from ultralytics.utils import LOGGER, colorstr
 from ultralytics.utils.checks import check_version
 from ultralytics.utils.instance import Instances
@@ -277,8 +280,9 @@ class MixUp(BaseMixTransform):
         r = np.random.beta(32.0, 32.0)  # mixup ratio, alpha=beta=32.0
         labels2 = labels['mix_labels'][0]
         labels['img'] = (labels['img'] * r + labels2['img'] * (1 - r)).astype(np.uint8)
-        labels['instances'] = Instances.concatenate([labels['instances'], labels2['instances']], axis=0)
-        labels['cls'] = np.concatenate([labels['cls'], labels2['cls']], 0)
+        if 'instances' in labels:
+            labels['instances'] = Instances.concatenate([labels['instances'], labels2['instances']], axis=0)
+        labels['cls'] = np.logical_or(labels['cls'],  labels2['cls'])*1
         return labels
 
 
@@ -762,14 +766,15 @@ class Format:
 
 
 class SquarePad:
-    def __call__(self, image):
+    def __call__(self, sample):
+        image = sample['img']
         h, w = image.shape[:2]
         max_wh = np.max([w, h])
         hp = int((max_wh - w) / 2)
         vp = int((max_wh - h) / 2)
         padding = (hp, vp, hp, vp)
         img_padding = F.pad(Image.fromarray(image), padding, 0, 'constant')
-        return np.array(img_padding)
+        return {'img': np.array(img_padding), 'cls': sample['cls']}
 
 
 def v8_transforms(dataset, imgsz, hyp, stretch=False):
@@ -810,7 +815,8 @@ def classify_transforms(size=224, mean=(0.0, 0.0, 0.0), std=(1.0, 1.0, 1.0)):  #
         raise TypeError(f'classify_transforms() size {size} must be integer, not (list, tuple)')
     if any(mean) or any(std):
         # return T.Compose([CenterCrop(size), ToTensor(), T.Normalize(mean, std, inplace=True)])
-        return T.Compose([SquarePad(), ToTensor(), T.Resize((size, size), antialias=True), T.Normalize(mean, std, inplace=True)])
+        return T.Compose(
+            [SquarePad(), ToTensor(), T.Resize((size, size), antialias=True), T.Normalize(mean, std, inplace=True)])
     else:
         return T.Compose([SquarePad(), ToTensor(), T.Resize((size, size), antialias=True)])
 
@@ -831,9 +837,8 @@ def classify_albumentations(
         hsv_v=0.4,  # image HSV-Value augmentation (fraction)
         mean=(0.0, 0.0, 0.0),  # IMAGENET_MEAN
         std=(1.0, 1.0, 1.0),  # IMAGENET_STD,
-        cutout_p=0.0,  # Cutout augmentation,
-        rotate_p=0.0,  # Rotate augmentation
         auto_aug=False,
+        normalize=True,
 ):
     """YOLOv8 classification Albumentations (optional, only used if package is installed)."""
     prefix = colorstr('albumentations: ')
@@ -843,8 +848,7 @@ def classify_albumentations(
 
         check_version(A.__version__, '1.0.3', hard=True)  # version requirement
         if augment:  # Resize and crop
-            T = []
-            # T = [A.RandomResizedCrop(height=size, width=size, scale=scale)]
+            T = [A.RandomResizedCrop(height=size, width=size, scale=scale)]
             if auto_aug:
                 # TODO: implement AugMix, AutoAug & RandAug in albumentations
                 LOGGER.info(f'{prefix}auto augmentations are currently not supported')
@@ -855,14 +859,11 @@ def classify_albumentations(
                     T += [A.VerticalFlip(p=vflip)]
                 if any((hsv_h, hsv_s, hsv_v)):
                     T += [A.ColorJitter(*hsv2colorjitter(hsv_h, hsv_s, hsv_v))]  # brightness, contrast, saturation, hue
-                if cutout_p > 0:
-                    T += [A.CoarseDropout(max_holes=12, p=cutout_p)]
-                if rotate_p > 0:
-                    pass # T += [A.Rotate(limit=30, p=rotate_p)]
         else:  # Use fixed crop for eval set (reproducibility)
             T = [A.SmallestMaxSize(max_size=size), A.CenterCrop(height=size, width=size)]
-        # T += [A.Normalize(mean=mean, std=std), ToTensorV2()]  # Normalize and convert to Tensor
-        T += [A.CLAHE(p=0.1)]
+
+        if normalize:
+            T += [A.Normalize(mean=mean, std=std), ToTensorV2()]  # Normalize and convert to Tensor
         LOGGER.info(prefix + ', '.join(f'{x}'.replace('always_apply=False, ', '') for x in T if x.p))
         return A.Compose(T)
 
@@ -870,6 +871,86 @@ def classify_albumentations(
         pass
     except Exception as e:
         LOGGER.info(f'{prefix}{e}')
+
+
+class MultilabelAlbumentations:
+    def __init__(self,
+                 augment=True,
+                 size=224,
+                 scale=(0.3, 1.0),
+                 hflip=0.5,
+                 vflip=0.0,
+                 hsv_h=0.015,  # image HSV-Hue augmentation (fraction)
+                 hsv_s=0.7,  # image HSV-Saturation augmentation (fraction)
+                 hsv_v=0.4,  # image HSV-Value augmentation (fraction)
+                 cutout_p=0.0,  # Cutout augmentation,
+                 rotate_p=0.0,  # Rotate augmentation,
+                 mean=(0.0, 0.0, 0.0),  # IMAGENET_MEAN
+                 std=(1.0, 1.0, 1.0),  # IMAGENET_STD,
+                 normalize_tensor=True,
+                 **kwargs):
+
+        prefix = colorstr('albumentations: ')
+        check_version(A.__version__, '1.0.3', hard=True)  # version requirement
+
+        # Basic algumentations
+        if augment:
+            T = [A.RandomResizedCrop(height=size, width=size, scale=scale),
+                 A.Blur(p=0.1),
+                 A.ToGray(p=0.1),
+                 A.CLAHE(p=0.1)]
+
+            # Flipping the image
+            if hflip > 0:
+                T += [A.HorizontalFlip(p=hflip)]
+            if vflip > 0:
+                T += [A.VerticalFlip(p=vflip)]
+            # Change hue, saturation and value
+            if any((hsv_h, hsv_s, hsv_v)):
+                T += [A.ColorJitter(*hsv2colorjitter(hsv_h, hsv_s, hsv_v))]
+            # Add black holes to the image at random
+            if cutout_p > 0:
+                T += [A.CoarseDropout(max_holes=10, p=cutout_p)]
+            # Rotation
+            if rotate_p > 0:
+                T += [A.Rotate(limit=45, p=rotate_p)]
+        else:
+            T = [A.Resize(height=size, width=size)]
+
+        # Normalize and to tensor
+        if normalize_tensor:
+            T += [A.Normalize(mean=mean, std=std), ToTensorV2()]
+
+        self.transform = A.Compose(T)
+        LOGGER.info(prefix + ', '.join(f'{x}'.replace('always_apply=False, ', '') for x in T if x.p))
+
+    def __call__(self, labels):
+        """Generates object detections and returns a dictionary with detection results."""
+        im = labels['img']
+        cls = labels['cls']
+        new = self.transform(image=im, class_labels=cls)  # transformed
+        labels['img'] = new['image']
+        labels['cls'] = np.array(new['class_labels']).astype(np.int32)
+        return labels
+
+
+def multilabel_classify_augmentations(dataset, **kwargs):
+    albumentations = MultilabelAlbumentations(**kwargs)
+    square_pad = SquarePad()
+    if kwargs.get('augment', True):
+        pre_transform_mixup = MultilabelAlbumentations(augment=False, size=kwargs.get('size', 128),
+                                                       normalize_tensor=False)
+        return Compose([
+            square_pad,
+            pre_transform_mixup,
+            MixUp(dataset, pre_transform=pre_transform_mixup, p=kwargs.get('mixup', 0.0)),
+            albumentations,
+        ])
+    else:
+        return Compose([
+            square_pad,
+            albumentations,
+        ])
 
 
 class ClassifyLetterBox:

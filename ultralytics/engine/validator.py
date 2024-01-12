@@ -26,7 +26,7 @@ import numpy as np
 import torch
 
 from ultralytics.cfg import get_cfg, get_save_dir
-from ultralytics.data.utils import check_cls_dataset, check_det_dataset
+from ultralytics.data.utils import check_cls_dataset, check_multilabel_cls_dataset, check_det_dataset
 from ultralytics.nn.autobackend import AutoBackend
 from ultralytics.utils import LOGGER, TQDM, callbacks, colorstr, emojis
 from ultralytics.utils.checks import check_imgsz
@@ -140,6 +140,8 @@ class BaseValidator:
                 self.data = check_det_dataset(self.args.data)
             elif self.args.task == 'classify':
                 self.data = check_cls_dataset(self.args.data, split=self.args.split)
+            elif self.args.task == 'multilabel_classify':
+                self.data = check_multilabel_cls_dataset(self.args.data, split=self.args.split)
             else:
                 raise FileNotFoundError(emojis(f"Dataset '{self.args.data}' for task={self.args.task} not found ❌"))
 
@@ -191,7 +193,7 @@ class BaseValidator:
         if self.training:
             model.float()
             results = {**stats, **trainer.label_loss_items(self.loss.cpu() / len(self.dataloader), prefix='val')}
-            return {k: round(float(v), 5) for k, v in results.items()}  # return results as 5 decimal place floats
+            return {k: round(float(v), 5) if isinstance(v, (int, float, complex)) else v for k, v in results.items()}  # return results as 5 decimal place floats
         else:
             LOGGER.info('Speed: %.1fms preprocess, %.1fms inference, %.1fms loss, %.1fms postprocess per image' %
                         tuple(self.speed.values()))

@@ -6,6 +6,8 @@ from ultralytics.engine.predictor import BasePredictor
 from ultralytics.engine.results import Results
 from ultralytics.utils import DEFAULT_CFG, ops
 
+from ultralytics.data.augment import multilabel_classify_augmentations
+
 
 class MultilabelClassificationPredictor(BasePredictor):
     """
@@ -27,12 +29,13 @@ class MultilabelClassificationPredictor(BasePredictor):
 
     def __init__(self, cfg=DEFAULT_CFG, overrides=None, _callbacks=None):
         super().__init__(cfg, overrides, _callbacks)
-        self.args.task = 'classify'
+        self.args.task = 'multilabel_classify'
 
     def preprocess(self, img):
         """Converts input image to model-compatible data type."""
         if not isinstance(img, torch.Tensor):
-            img = torch.stack([self.transforms(im) for im in img], dim=0)
+            self.transforms = multilabel_classify_augmentations(None, size=self.imgsz[0], augment=False, normalize_tensor=True)
+            img = torch.stack([self.transforms({'img': im, 'cls': []})['img'] for im in img], dim=0)
         img = (img if isinstance(img, torch.Tensor) else torch.from_numpy(img)).to(self.model.device)
         return img.half() if self.model.fp16 else img.float()  # uint8 to fp16/32
 

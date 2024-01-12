@@ -4,6 +4,7 @@ import torch
 import torchvision
 
 from ultralytics.data import MultilabelClassificationDataset, build_dataloader
+from ultralytics.data.augment import multilabel_classify_augmentations
 from ultralytics.engine.trainer import BaseTrainer
 from ultralytics.models import yolo
 from ultralytics.nn.tasks import ClassificationModel, attempt_load_one_weight
@@ -90,9 +91,9 @@ class MultilabelClassificationTrainer(BaseTrainer):
         # Attach inference transforms
         if mode != 'train':
             if is_parallel(self.model):
-                self.model.module.transforms = loader.dataset.torch_transforms
+                self.model.module.transforms = loader.dataset.transform
             else:
-                self.model.transforms = loader.dataset.torch_transforms
+                self.model.transforms = loader.dataset.transform
         return loader
 
     def preprocess_batch(self, batch):
@@ -145,6 +146,6 @@ class MultilabelClassificationTrainer(BaseTrainer):
         plot_images(
             images=batch['img'],
             batch_idx=torch.arange(len(batch['img'])),
-            cls=batch['cls'].view(-1),  # warning: use .view(), not .squeeze() for Classify models
+            cls=batch['cls'],  # warning: use .view(), not .squeeze() for Classify models
             fname=self.save_dir / f'train_batch{ni}.jpg',
             on_plot=self.on_plot)

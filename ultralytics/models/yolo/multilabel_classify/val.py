@@ -2,7 +2,7 @@
 
 import torch
 
-from ultralytics.data import ClassificationDataset, build_dataloader
+from ultralytics.data import MultilabelClassificationDataset, build_dataloader
 from ultralytics.engine.validator import BaseValidator
 from ultralytics.utils import LOGGER
 from ultralytics.utils.metrics import MultilabelClassifyMetrics, ConfusionMatrix
@@ -31,7 +31,7 @@ class MultilabelClassificationValidator(BaseValidator):
         super().__init__(dataloader, save_dir, pbar, args, _callbacks)
         self.targets = None
         self.pred = None
-        self.args.task = 'classify'
+        self.args.task = 'multilabel_classify'
         self.metrics = MultilabelClassifyMetrics()
 
     def get_desc(self):
@@ -42,7 +42,7 @@ class MultilabelClassificationValidator(BaseValidator):
         """Initialize confusion matrix, class names, and top-1 and top-5 accuracy."""
         self.names = model.names
         self.nc = len(model.names)
-        # self.confusion_matrix = ConfusionMatrix(nc=self.nc, conf=self.args.conf, task='classify')
+        self.confusion_matrix = ConfusionMatrix(nc=self.nc, conf=self.args.conf, task='multilabel_classify')
         self.pred = []
         self.targets = []
 
@@ -55,7 +55,7 @@ class MultilabelClassificationValidator(BaseValidator):
 
     def update_metrics(self, preds, batch):
         """Updates running metrics with model predictions and batch targets."""
-        self.pred.append(torch.round(preds))
+        self.pred.append((preds > 0.5) * 1.0)
         self.targets.append(batch['cls'])
 
     def finalize_metrics(self, *args, **kwargs):
@@ -70,7 +70,7 @@ class MultilabelClassificationValidator(BaseValidator):
                                            on_plot=self.on_plot)
         """
         self.metrics.speed = self.speed
-        # self.metrics.confusion_matrix = self.confusion_matrix
+        self.metrics.confusion_matrix = self.confusion_matrix
         self.metrics.save_dir = self.save_dir
 
     def get_stats(self):
@@ -79,7 +79,7 @@ class MultilabelClassificationValidator(BaseValidator):
         return self.metrics.results_dict
 
     def build_dataset(self, img_path):
-        return ClassificationDataset(root=img_path, args=self.args, augment=False, prefix=self.args.split)
+        return MultilabelClassificationDataset(root=img_path, args=self.args, augment=False, prefix='val')
 
     def get_dataloader(self, dataset_path, batch_size):
         """Builds and returns a data loader for classification tasks with given parameters."""
@@ -96,7 +96,7 @@ class MultilabelClassificationValidator(BaseValidator):
         plot_images(
             images=batch['img'],
             batch_idx=torch.arange(len(batch['img'])),
-            cls=batch['cls'].view(-1),  # warning: use .view(), not .squeeze() for Classify models
+            cls=batch['cls'],  # warning: use .view(), not .squeeze() for Classify models
             fname=self.save_dir / f'val_batch{ni}_labels.jpg',
             names=self.names,
             on_plot=self.on_plot)
@@ -105,7 +105,7 @@ class MultilabelClassificationValidator(BaseValidator):
         """Plots predicted bounding boxes on input images and saves the result."""
         plot_images(batch['img'],
                     batch_idx=torch.arange(len(batch['img'])),
-                    cls=torch.argmax(preds, dim=1),
+                    cls=torch.round(preds),
                     fname=self.save_dir / f'val_batch{ni}_pred.jpg',
                     names=self.names,
                     on_plot=self.on_plot)  # pred
