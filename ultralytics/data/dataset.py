@@ -313,11 +313,12 @@ class MultilabelClassificationDataset(Dataset):
         self.samples = self.verify_images()  # filter out bad images
         self.samples = [list(x) + [Path(x[0]).with_suffix('.npy'), None] for x in self.samples]  # file, index, npy, im
 
+        self.k = 5e-2  # Param for label smoothing
         self.transform = multilabel_classify_augmentations(
             self,
             augment=augment,
             size=args.imgsz,
-            scale=(1.0 - args.scale, 1.0),  # (0.08, 1.0)
+            scale=(0.2, 1.0),  # (0.08, 1.0)
             hflip=args.fliplr,
             vflip=args.flipud,
             hsv_h=args.hsv_h,  # HSV-Hue augmentation (fraction)
@@ -325,9 +326,10 @@ class MultilabelClassificationDataset(Dataset):
             hsv_v=args.hsv_v,  # HSV-Value augmentation (fraction)
             mean=(0.0, 0.0, 0.0),  # IMAGENET_MEAN
             std=(1.0, 1.0, 1.0),  # IMAGENET_STD
-            cutout_p=0.1,
-            rotate_p=0.1,
-            mixup=0.1)
+            cutout_p=0.2,
+            rotate_p=0.2,
+            mixup=0.0,
+            mosaic=args.mosaic)
 
     def read_samples(self):
         self.samples = []
@@ -345,12 +347,19 @@ class MultilabelClassificationDataset(Dataset):
     def __getitem__(self, index):
         """Returns subset of data and targets corresponding to given indices."""
         sample = self.get_image_and_label(index)
-        transformed_sample = self.transform(sample)
+        sample = self.transform(sample)
+        self.label_smoothing(sample)
 
         #img_transform = sample.permute(1, 2, 0).detach().cpu().numpy()*255
         #cv2.imshow('test', img_transform.astype(np.uint8))
         #cv2.waitKey(5000)
-        return transformed_sample
+        return sample
+
+    def label_smoothing(self, sample):
+        cls = sample['cls']
+        n = len(cls)
+        soft_cls = (1 - self.k) * cls + (self.k / n)
+        sample['cls'] = soft_cls
 
     def get_image_and_label(self, index):
         """Returns subset of data and targets corresponding to given indices."""

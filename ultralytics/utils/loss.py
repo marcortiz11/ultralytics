@@ -411,7 +411,7 @@ class v8MultilabelClassificationLoss:
 
 class v8MultilabelClassificationLoss:
 
-    def __init__(self, alpha=1.5, gamma=2.5):
+    def __init__(self, alpha=0.5, gamma=2):
         self.alpha = alpha
         self.gamma = gamma
 

@@ -56,6 +56,7 @@ class MultilabelClassificationValidator(BaseValidator):
     def update_metrics(self, preds, batch):
         """Updates running metrics with model predictions and batch targets."""
         self.pred.append((preds > 0.5) * 1.0)
+        batch['cls'] = torch.round(batch['cls'])
         self.targets.append(batch['cls'])
 
     def finalize_metrics(self, *args, **kwargs):

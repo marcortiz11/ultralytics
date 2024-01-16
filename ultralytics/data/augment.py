@@ -127,22 +127,19 @@ class Mosaic(BaseMixTransform):
         n (int, optional): The grid size, either 4 (for 2x2) or 9 (for 3x3).
     """
 
-    def __init__(self, dataset, imgsz=640, p=1.0, n=4):
+    def __init__(self, dataset, imgsz=640, p=1.0, n=4, **kwargs):
         """Initializes the object with a dataset, image size, probability, and border."""
         assert 0 <= p <= 1.0, f'The probability should be in range [0, 1], but got {p}.'
         assert n in (4, 9), 'grid must be equal to 4 or 9.'
-        super().__init__(dataset=dataset, p=p)
+        super().__init__(dataset=dataset, p=p, **kwargs)
         self.dataset = dataset
         self.imgsz = imgsz
         self.border = (-imgsz // 2, -imgsz // 2)  # width, height
         self.n = n
 
-    def get_indexes(self, buffer=True):
+    def get_indexes(self):
         """Return a list of random indexes from the dataset."""
-        if buffer:  # select images from buffer
-            return random.choices(list(self.dataset.buffer), k=self.n - 1)
-        else:  # select any images
-            return [random.randint(0, len(self.dataset) - 1) for _ in range(self.n - 1)]
+        return [random.randint(0, len(self.dataset) - 1) for _ in range(self.n - 1)]
 
     def _mix_transform(self, labels):
         """Apply mixup transformation to the input image and labels."""
@@ -263,6 +260,122 @@ class Mosaic(BaseMixTransform):
         final_labels['instances'].clip(imgsz, imgsz)
         good = final_labels['instances'].remove_zero_area_boxes()
         final_labels['cls'] = final_labels['cls'][good]
+        return final_labels
+
+
+class MultilabelClassifyMosaic(Mosaic):
+
+    def _mosaic4(self, labels):
+        """Create a 2x2 image mosaic."""
+        mosaic_labels = []
+        s = self.imgsz
+        yc, xc = (int(random.uniform(-x, 2 * s + x)) for x in self.border)  # mosaic center x, y
+        for i in range(4):
+            labels_patch = self.pre_transform(labels) if i == 0 else labels['mix_labels'][i - 1]
+            # Load image
+            img = labels_patch['img']
+            h, w = labels_patch['img'].shape[:2]
+
+            # Place img in img4
+            if i == 0:  # top left
+                img4 = np.full((s * 2, s * 2, img.shape[2]), 114, dtype=np.uint8)  # base image with 4 tiles
+                x1a, y1a, x2a, y2a = max(xc - w, 0), max(yc - h, 0), xc, yc  # xmin, ymin, xmax, ymax (large image)
+                x1b, y1b, x2b, y2b = w - (x2a - x1a), h - (y2a - y1a), w, h  # xmin, ymin, xmax, ymax (small image)
+            elif i == 1:  # top right
+                x1a, y1a, x2a, y2a = xc, max(yc - h, 0), min(xc + w, s * 2), yc
+                x1b, y1b, x2b, y2b = 0, h - (y2a - y1a), min(w, x2a - x1a), h
+            elif i == 2:  # bottom left
+                x1a, y1a, x2a, y2a = max(xc - w, 0), yc, xc, min(s * 2, yc + h)
+                x1b, y1b, x2b, y2b = w - (x2a - x1a), 0, w, min(y2a - y1a, h)
+            elif i == 3:  # bottom right
+                x1a, y1a, x2a, y2a = xc, yc, min(xc + w, s * 2), min(s * 2, yc + h)
+                x1b, y1b, x2b, y2b = 0, 0, min(w, x2a - x1a), min(y2a - y1a, h)
+
+            img4[y1a:y2a, x1a:x2a] = img[y1b:y2b, x1b:x2b]  # img4[ymin:ymax, xmin:xmax]
+            padw = x1a - x1b
+            padh = y1a - y1b
+
+            labels_patch = self._update_labels(labels_patch, padw, padh)
+            mosaic_labels.append(labels_patch)
+        final_labels = self._cat_labels(mosaic_labels)
+        final_labels['img'] = img4
+
+        """
+        cv2.imshow("mosaic", img4)
+        cv2.waitKey(5000)
+        """
+
+        return final_labels
+
+    def _mosaic9(self, labels):
+        """Create a 3x3 image mosaic."""
+        mosaic_labels = []
+        s = self.imgsz
+        hp, wp = -1, -1  # height, width previous
+        for i in range(9):
+            labels_patch = labels if i == 0 else labels['mix_labels'][i - 1]
+            # Load image
+            img = labels_patch['img']
+            h, w = labels_patch.pop('resized_shape')
+
+            # Place img in img9
+            if i == 0:  # center
+                img9 = np.full((s * 3, s * 3, img.shape[2]), 114, dtype=np.uint8)  # base image with 4 tiles
+                h0, w0 = h, w
+                c = s, s, s + w, s + h  # xmin, ymin, xmax, ymax (base) coordinates
+            elif i == 1:  # top
+                c = s, s - h, s + w, s
+            elif i == 2:  # top right
+                c = s + wp, s - h, s + wp + w, s
+            elif i == 3:  # right
+                c = s + w0, s, s + w0 + w, s + h
+            elif i == 4:  # bottom right
+                c = s + w0, s + hp, s + w0 + w, s + hp + h
+            elif i == 5:  # bottom
+                c = s + w0 - w, s + h0, s + w0, s + h0 + h
+            elif i == 6:  # bottom left
+                c = s + w0 - wp - w, s + h0, s + w0 - wp, s + h0 + h
+            elif i == 7:  # left
+                c = s - w, s + h0 - h, s, s + h0
+            elif i == 8:  # top left
+                c = s - w, s + h0 - hp - h, s, s + h0 - hp
+
+            padw, padh = c[:2]
+            x1, y1, x2, y2 = (max(x, 0) for x in c)  # allocate coords
+
+            # Image
+            img9[y1:y2, x1:x2] = img[y1 - padh:, x1 - padw:]  # img9[ymin:ymax, xmin:xmax]
+            hp, wp = h, w  # height, width previous for next iteration
+
+            # Labels assuming imgsz*2 mosaic size
+            labels_patch = self._update_labels(labels_patch, padw + self.border[0], padh + self.border[1])
+            mosaic_labels.append(labels_patch)
+        final_labels = self._cat_labels(mosaic_labels)
+
+        final_labels['img'] = img9[-self.border[0]:self.border[0], -self.border[1]:self.border[1]]
+        return final_labels
+
+    @staticmethod
+    def _update_labels(labels, padw, padh):
+        return labels
+
+    def _cat_labels(self, mosaic_labels):
+        """Return labels with mosaic border instances clipped."""
+        if len(mosaic_labels) == 0:
+            return {}
+
+        # Combine the labels
+        cls = np.array(mosaic_labels[0]['cls'])
+        for labels in mosaic_labels:
+            cls += labels['cls']
+        cls = np.clip(cls, 0, 1)
+
+        final_labels = {
+            'img': mosaic_labels[0]['img'],
+            'cls': cls,
+            'mosaic_border': self.border
+        }  # final_labels
+
         return final_labels
 
 
@@ -777,6 +890,26 @@ class SquarePad:
         return {'img': np.array(img_padding), 'cls': sample['cls']}
 
 
+class ResizeWithPad:
+
+    def __init__(self, imsize=128):
+        self.imsize = imsize
+
+    def __call__(self, sample):
+        # Add Padding
+        image = sample['img']
+        h, w = image.shape[:2]
+        max_wh = np.max([w, h])
+        hp = int((max_wh - w) / 2)
+        vp = int((max_wh - h) / 2)
+        padding = (hp, vp, hp, vp)
+        img_padding = np.array(F.pad(Image.fromarray(image), padding, 128, 'constant'))
+        # Resize
+        img_resized_padding = cv2.resize(img_padding, (self.imsize, self.imsize))
+
+        return {'img': np.array(img_resized_padding), 'cls': sample['cls']}
+
+
 def v8_transforms(dataset, imgsz, hyp, stretch=False):
     """Convert images to a size suitable for YOLOv8 training."""
     pre_transform = Compose([
@@ -877,14 +1010,14 @@ class MultilabelAlbumentations:
     def __init__(self,
                  augment=True,
                  size=224,
-                 scale=(0.3, 1.0),
+                 scale=(0.2, 1.0),
                  hflip=0.5,
-                 vflip=0.0,
+                 vflip=0.5,
                  hsv_h=0.015,  # image HSV-Hue augmentation (fraction)
                  hsv_s=0.7,  # image HSV-Saturation augmentation (fraction)
                  hsv_v=0.4,  # image HSV-Value augmentation (fraction)
-                 cutout_p=0.0,  # Cutout augmentation,
-                 rotate_p=0.0,  # Rotate augmentation,
+                 cutout_p=0.1,  # Cutout augmentation,
+                 rotate_p=0.1,  # Rotate augmentation,
                  mean=(0.0, 0.0, 0.0),  # IMAGENET_MEAN
                  std=(1.0, 1.0, 1.0),  # IMAGENET_STD,
                  normalize_tensor=True,
@@ -894,10 +1027,12 @@ class MultilabelAlbumentations:
         check_version(A.__version__, '1.0.3', hard=True)  # version requirement
 
         # Basic algumentations
+        T = []
+
         if augment:
-            T = [A.RandomResizedCrop(height=size, width=size, scale=scale),
-                 A.Blur(p=0.1),
-                 A.ToGray(p=0.1),
+            T += [A.RandomResizedCrop(height=size, width=size, scale=scale),
+                 A.Blur(p=0.2),
+                 A.ToGray(p=0.2),
                  A.CLAHE(p=0.1)]
 
             # Flipping the image
@@ -914,8 +1049,6 @@ class MultilabelAlbumentations:
             # Rotation
             if rotate_p > 0:
                 T += [A.Rotate(limit=45, p=rotate_p)]
-        else:
-            T = [A.Resize(height=size, width=size)]
 
         # Normalize and to tensor
         if normalize_tensor:
@@ -936,19 +1069,22 @@ class MultilabelAlbumentations:
 
 def multilabel_classify_augmentations(dataset, **kwargs):
     albumentations = MultilabelAlbumentations(**kwargs)
-    square_pad = SquarePad()
+    resize_pad = ResizeWithPad(kwargs.get('size', 320))
+    pre_transform = Compose([
+        MultilabelClassifyMosaic(dataset, imgsz=kwargs.get('size', 320), p=kwargs.get('mosaic', 0.0),
+                                 pre_transform=resize_pad),
+        resize_pad,
+    ])
+
     if kwargs.get('augment', True):
-        pre_transform_mixup = MultilabelAlbumentations(augment=False, size=kwargs.get('size', 128),
-                                                       normalize_tensor=False)
         return Compose([
-            square_pad,
-            pre_transform_mixup,
-            MixUp(dataset, pre_transform=pre_transform_mixup, p=kwargs.get('mixup', 0.0)),
+            pre_transform,
+            MixUp(dataset, pre_transform=resize_pad, p=kwargs.get('mixup', 0.0)),
             albumentations,
         ])
     else:
         return Compose([
-            square_pad,
+            resize_pad,
             albumentations,
         ])
 

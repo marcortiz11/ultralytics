@@ -295,7 +295,7 @@ class BaseTrainer:
         self._setup_train(world_size)
 
         # Clip gradients to avoid exploding gradients
-        torch.nn.utils.clip_grad_norm(self.model.parameters(), max_norm=1.0)
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=5.0)
 
         self.epoch_time = None
         self.epoch_time_start = time.time()

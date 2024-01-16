@@ -1,5 +1,5 @@
 # Ultralytics YOLO 🚀, AGPL-3.0 license
-
+import cv2
 import torch
 
 from ultralytics.engine.predictor import BasePredictor
@@ -35,7 +35,15 @@ class MultilabelClassificationPredictor(BasePredictor):
         """Converts input image to model-compatible data type."""
         if not isinstance(img, torch.Tensor):
             self.transforms = multilabel_classify_augmentations(None, size=self.imgsz[0], augment=False, normalize_tensor=True)
+            transformed_img = (self.transforms({'img': img[0], 'cls': []})['img'])
             img = torch.stack([self.transforms({'img': im, 'cls': []})['img'] for im in img], dim=0)
+            """
+            # Show image transformed
+            import numpy as np
+            np_image = transformed_img.permute((1, 2, 0)).detach().cpu().numpy() * 255
+            cv2.imshow('Transformed image', np_image.astype(np.uint8))
+            cv2.waitKey(5000)
+            """
         img = (img if isinstance(img, torch.Tensor) else torch.from_numpy(img)).to(self.model.device)
         return img.half() if self.model.fp16 else img.float()  # uint8 to fp16/32
 
