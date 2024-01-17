@@ -411,9 +411,10 @@ class v8MultilabelClassificationLoss:
 
 class v8MultilabelClassificationLoss:
 
-    def __init__(self, alpha=0.5, gamma=2):
+    def __init__(self, alpha=1.5, gamma=2, w=None):
         self.alpha = alpha
         self.gamma = gamma
+        self.w = w
 
     def __call__(self, preds, batch):
         targets = batch['cls']

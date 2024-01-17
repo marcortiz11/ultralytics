@@ -309,7 +309,7 @@ class MultilabelClassificationDataset(Dataset):
         self.cache_disk = cache == 'disk'
         self.prefix = prefix
 
-        self.read_samples()
+        self.weights_balance = self.read_samples()
         self.samples = self.verify_images()  # filter out bad images
         self.samples = [list(x) + [Path(x[0]).with_suffix('.npy'), None] for x in self.samples]  # file, index, npy, im
 
@@ -318,7 +318,7 @@ class MultilabelClassificationDataset(Dataset):
             self,
             augment=augment,
             size=args.imgsz,
-            scale=(0.2, 1.0),  # (0.08, 1.0)
+            scale=(0.3, 1.0),  # (0.08, 1.0)
             hflip=args.fliplr,
             vflip=args.flipud,
             hsv_h=args.hsv_h,  # HSV-Hue augmentation (fraction)
@@ -328,18 +328,26 @@ class MultilabelClassificationDataset(Dataset):
             std=(1.0, 1.0, 1.0),  # IMAGENET_STD
             cutout_p=0.2,
             rotate_p=0.2,
-            mixup=0.0,
-            mosaic=args.mosaic)
+            mixup=args.mixup,
+            mosaic=args.mosaic,
+            mixcut=0.2)
 
     def read_samples(self):
         self.samples = []
         sample_abspath = os.path.dirname(self.root)
         with open(os.path.join(self.root), newline='') as csvfile:
             samples_csv = csv.reader(csvfile, delimiter=',')
-            next(samples_csv, None)  # Skip header
+            n = len(next(samples_csv, None)) - 5  # Skip header
+            weights_balance = np.zeros(n)
             for sample_csv in samples_csv:
-                sample = (os.path.join(sample_abspath, sample_csv[0]), tuple(sample_csv[1:]))
+                # sample = (file_path, classes, head_bbox)
+                sample = (os.path.join(sample_abspath, sample_csv[0]), tuple(sample_csv[1:-4]), tuple(sample_csv[-4:]))
+                weights_balance += np.array([int(x) for x in sample_csv[1:-4]])
                 self.samples.append(sample)
+
+        weights_balance = 1/weights_balance
+        weights_balance /= np.sum(weights_balance)
+        return weights_balance
 
     def __len__(self):
         return len(self.samples)
@@ -363,7 +371,7 @@ class MultilabelClassificationDataset(Dataset):
 
     def get_image_and_label(self, index):
         """Returns subset of data and targets corresponding to given indices."""
-        f, j, fn, im = self.samples[index]  # filename, index, filename.with_suffix('.npy'), image
+        f, cls, head, fn, im = self.samples[index]  # filename, index, filename.with_suffix('.npy'), image
         if self.cache_ram and im is None:
             im = self.samples[index][3] = cv2.imread(f)
         elif self.cache_disk:
@@ -375,7 +383,8 @@ class MultilabelClassificationDataset(Dataset):
 
         sample = {
             'img': im,
-            'cls': [float(x) for x in j]
+            'cls': [float(x) for x in cls],
+            'head': [round(float(x), 3) for x in head] if '-1' not in head else None
         }
         return sample
 

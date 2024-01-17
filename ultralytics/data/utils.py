@@ -59,7 +59,7 @@ def exif_size(img: Image.Image):
 
 def verify_image(args):
     """Verify one image."""
-    (im_file, cls), prefix = args
+    (im_file, cls, head_bbox), prefix = args
     # Number (found, corrupt), message
     nf, nc, msg = 0, 0, ''
     try:
@@ -79,7 +79,7 @@ def verify_image(args):
     except Exception as e:
         nc = 1
         msg = f'{prefix}WARNING ⚠️ {im_file}: ignoring corrupt image/label: {e}'
-    return (im_file, cls), nf, nc, msg
+    return (im_file, cls, head_bbox), nf, nc, msg
 
 
 def verify_image_label(args):
@@ -426,7 +426,7 @@ def check_multilabel_cls_dataset(dataset, split=''):
         LOGGER.warning("WARNING ⚠️ Dataset 'split=test' not found, using 'split=val' instead.")
 
     df = pd.read_csv(train_set, sep=",", header=0)
-    names = df.columns.values.tolist()[1:]
+    names = df.columns.values.tolist()[1:-4]
     nc = len(names)
     names = dict(enumerate(sorted(names)))
 

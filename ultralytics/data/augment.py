@@ -271,7 +271,7 @@ class MultilabelClassifyMosaic(Mosaic):
         s = self.imgsz
         yc, xc = (int(random.uniform(-x, 2 * s + x)) for x in self.border)  # mosaic center x, y
         for i in range(4):
-            labels_patch = self.pre_transform(labels) if i == 0 else labels['mix_labels'][i - 1]
+            labels_patch = labels if i == 0 else labels['mix_labels'][i - 1]
             # Load image
             img = labels_patch['img']
             h, w = labels_patch['img'].shape[:2]
@@ -291,7 +291,9 @@ class MultilabelClassifyMosaic(Mosaic):
                 x1a, y1a, x2a, y2a = xc, yc, min(xc + w, s * 2), min(s * 2, yc + h)
                 x1b, y1b, x2b, y2b = 0, 0, min(w, x2a - x1a), min(y2a - y1a, h)
 
-            img4[y1a:y2a, x1a:x2a] = img[y1b:y2b, x1b:x2b]  # img4[ymin:ymax, xmin:xmax]
+            img_resized = cv2.resize(img, (x2a-x1a, y2a-y1a))
+
+            img4[y1a:y2a, x1a:x2a] = img_resized   #img[y1b:y2b, x1b:x2b]  # img4[ymin:ymax, xmin:xmax]
             padw = x1a - x1b
             padh = y1a - y1b
 
@@ -307,56 +309,9 @@ class MultilabelClassifyMosaic(Mosaic):
 
         return final_labels
 
-    def _mosaic9(self, labels):
-        """Create a 3x3 image mosaic."""
-        mosaic_labels = []
-        s = self.imgsz
-        hp, wp = -1, -1  # height, width previous
-        for i in range(9):
-            labels_patch = labels if i == 0 else labels['mix_labels'][i - 1]
-            # Load image
-            img = labels_patch['img']
-            h, w = labels_patch.pop('resized_shape')
-
-            # Place img in img9
-            if i == 0:  # center
-                img9 = np.full((s * 3, s * 3, img.shape[2]), 114, dtype=np.uint8)  # base image with 4 tiles
-                h0, w0 = h, w
-                c = s, s, s + w, s + h  # xmin, ymin, xmax, ymax (base) coordinates
-            elif i == 1:  # top
-                c = s, s - h, s + w, s
-            elif i == 2:  # top right
-                c = s + wp, s - h, s + wp + w, s
-            elif i == 3:  # right
-                c = s + w0, s, s + w0 + w, s + h
-            elif i == 4:  # bottom right
-                c = s + w0, s + hp, s + w0 + w, s + hp + h
-            elif i == 5:  # bottom
-                c = s + w0 - w, s + h0, s + w0, s + h0 + h
-            elif i == 6:  # bottom left
-                c = s + w0 - wp - w, s + h0, s + w0 - wp, s + h0 + h
-            elif i == 7:  # left
-                c = s - w, s + h0 - h, s, s + h0
-            elif i == 8:  # top left
-                c = s - w, s + h0 - hp - h, s, s + h0 - hp
-
-            padw, padh = c[:2]
-            x1, y1, x2, y2 = (max(x, 0) for x in c)  # allocate coords
-
-            # Image
-            img9[y1:y2, x1:x2] = img[y1 - padh:, x1 - padw:]  # img9[ymin:ymax, xmin:xmax]
-            hp, wp = h, w  # height, width previous for next iteration
-
-            # Labels assuming imgsz*2 mosaic size
-            labels_patch = self._update_labels(labels_patch, padw + self.border[0], padh + self.border[1])
-            mosaic_labels.append(labels_patch)
-        final_labels = self._cat_labels(mosaic_labels)
-
-        final_labels['img'] = img9[-self.border[0]:self.border[0], -self.border[1]:self.border[1]]
-        return final_labels
-
     @staticmethod
     def _update_labels(labels, padw, padh):
+        labels['head'] = [-1]*4
         return labels
 
     def _cat_labels(self, mosaic_labels):
@@ -396,6 +351,49 @@ class MixUp(BaseMixTransform):
         if 'instances' in labels:
             labels['instances'] = Instances.concatenate([labels['instances'], labels2['instances']], axis=0)
         labels['cls'] = np.logical_or(labels['cls'],  labels2['cls'])*1
+        return labels
+
+
+class MixCutHead(BaseMixTransform):
+
+    def __init__(self, dataset, pre_transform=None, p=0.0) -> None:
+        super().__init__(dataset=dataset, pre_transform=pre_transform, p=p)
+
+    def get_indexes(self):
+        """Get a random index from the dataset."""
+        return random.randint(0, len(self.dataset) - 1)
+
+    def _mix_transform(self, labels):
+        if labels['mix_labels'][0]['head'] is not None and labels['head'] is not None:
+            # Crop a head from label origin
+            labels2 = labels['mix_labels'][0]
+            h_origin, w_origin = labels2['img'].shape[:2]
+            head_bbox = [
+                int(labels2['head'][0] * w_origin),
+                int(labels2['head'][1] * h_origin),
+                int(labels2['head'][2] * w_origin),
+                int(labels2['head'][3] * h_origin)]
+            head_crop_origin = labels2['img'][head_bbox[1]:head_bbox[3], head_bbox[0]:head_bbox[2], ...]
+
+            # Place head on label destination
+            h_dest, w_dest = labels['img'].shape[:2]
+            head_bbox = [
+                int(labels['head'][0] * w_dest),
+                int(labels['head'][1] * h_dest),
+                int(labels['head'][2] * w_dest),
+                int(labels['head'][3] * h_dest)]
+            h_head_dest = head_bbox[3] - head_bbox[1]
+            w_head_dest = head_bbox[2] - head_bbox[0]
+            head_crop_origin_resized = cv2.resize(head_crop_origin, (w_head_dest, h_head_dest))
+
+            head_crop_dst = labels['img'][head_bbox[1]:head_bbox[1]+head_crop_origin_resized.shape[0],
+                                          head_bbox[0]:head_bbox[0]+head_crop_origin_resized.shape[1], ...]
+
+            if head_crop_origin_resized.shape[0] == head_crop_dst.shape[0] and \
+                head_crop_origin_resized.shape[1] == head_crop_dst.shape[1]:
+                labels['img'][head_bbox[1]:head_bbox[1]+head_crop_origin_resized.shape[0],
+                              head_bbox[0]:head_bbox[0]+head_crop_origin_resized.shape[1], ...] = head_crop_origin_resized
+                labels['cls'] = labels2['cls']
         return labels
 
 
@@ -1006,11 +1004,54 @@ def classify_albumentations(
         LOGGER.info(f'{prefix}{e}')
 
 
+class HeadDropout:
+    def __init__(self, max_holes=2, max_height=0.2, max_width=0.2, min_height=0.05, min_width=0.05, p=0.1):
+        self.max_holes = max_holes
+        self.max_height = max_height
+        self.max_width = max_width
+        self.min_height = min_height
+        self.min_width = min_width
+        self.p = p
+
+    def __call__(self, sample, **kwargs):
+        if random.random() < self.p:
+            image = sample['img']
+            h, w, _ = image.shape
+
+            head = sample['head']
+            if head is not None:
+                x1 = int(head[0] * w)
+                y1 = int(head[1] * h)
+                x2 = int(head[2] * w)
+                y2 = int(head[3] * h)
+                h_head = max((y2 - y1), 0)
+                w_head = max((x2 - x1), 0)
+
+                head = image[y1:y2, x1:x2, ...]
+
+                for _ in range(np.random.randint(1, self.max_holes + 1)):
+                    hole_height = np.random.randint(self.min_height*h_head, self.max_height*h_head)
+                    hole_width = np.random.randint(self.min_width*w_head, self.max_width*w_head)
+                    top = np.random.randint(y1, max(h_head - hole_height, y1+1))
+                    left = np.random.randint(x1, max(w_head - hole_width, x1+1))
+                    image[top:top + hole_height, left:left + hole_width, :] = 0
+            else:
+                for _ in range(np.random.randint(1, self.max_holes + 1)):
+                    hole_height = np.random.randint(self.min_height*h, self.max_height*h)
+                    hole_width = np.random.randint(self.min_width*w, self.max_width*w)
+                    h, w, _ = image.shape
+                    top = np.random.randint(0, h - hole_height)
+                    left = np.random.randint(0, w - hole_width)
+                    image[top:top + hole_height, left:left + hole_width, :] = 0
+            sample['img'] = image
+        return sample
+
+
 class MultilabelAlbumentations:
     def __init__(self,
                  augment=True,
                  size=224,
-                 scale=(0.2, 1.0),
+                 scale=(0.5, 1.0),
                  hflip=0.5,
                  vflip=0.5,
                  hsv_h=0.015,  # image HSV-Hue augmentation (fraction)
@@ -1030,10 +1071,10 @@ class MultilabelAlbumentations:
         T = []
 
         if augment:
-            T += [A.RandomResizedCrop(height=size, width=size, scale=scale),
+            T += [#A.RandomResizedCrop(height=size, width=size, scale=scale),
                  A.Blur(p=0.2),
                  A.ToGray(p=0.2),
-                 A.CLAHE(p=0.1)]
+                 A.CLAHE(p=0.2)]
 
             # Flipping the image
             if hflip > 0:
@@ -1045,10 +1086,19 @@ class MultilabelAlbumentations:
                 T += [A.ColorJitter(*hsv2colorjitter(hsv_h, hsv_s, hsv_v))]
             # Add black holes to the image at random
             if cutout_p > 0:
-                T += [A.CoarseDropout(max_holes=10, p=cutout_p)]
+                '''
+                T += [A.CoarseDropout(max_holes=4,
+                                      min_holes=1,
+                                      max_height=int(0.2*size),
+                                      max_width=int(0.2*size),
+                                      min_height=int(0.05*size),
+                                      min_width=int(0.05*size),
+                                      p=cutout_p)]
+                '''
+                pass
             # Rotation
             if rotate_p > 0:
-                T += [A.Rotate(limit=45, p=rotate_p)]
+                T += [A.Rotate(limit=30, p=rotate_p)]
 
         # Normalize and to tensor
         if normalize_tensor:
@@ -1068,24 +1118,30 @@ class MultilabelAlbumentations:
 
 
 def multilabel_classify_augmentations(dataset, **kwargs):
-    albumentations = MultilabelAlbumentations(**kwargs)
+    albumentations = MultilabelAlbumentations(**kwargs, normalize_tensor=False)
     resize_pad = ResizeWithPad(kwargs.get('size', 320))
-    pre_transform = Compose([
-        MultilabelClassifyMosaic(dataset, imgsz=kwargs.get('size', 320), p=kwargs.get('mosaic', 0.0),
-                                 pre_transform=resize_pad),
-        resize_pad,
+    normalize_tensor = MultilabelAlbumentations(augment=False, normalize_tensor=True)
+
+    pre_transforms = Compose([
+        MixCutHead(dataset, p=kwargs.get('mixcut', 0.0)),
+        HeadDropout(p=kwargs.get('cutout_p', 0.0), max_width=0.3, max_height=0.3, min_height=0.1, min_width=0.1, max_holes=2),
+        albumentations,
     ])
 
     if kwargs.get('augment', True):
         return Compose([
-            pre_transform,
+            MultilabelClassifyMosaic(dataset,
+                                     pre_transform=pre_transforms,
+                                     imgsz=kwargs.get('size', 320),
+                                     p=kwargs.get('mosaic', 0.0)),
+            resize_pad,
             MixUp(dataset, pre_transform=resize_pad, p=kwargs.get('mixup', 0.0)),
-            albumentations,
+            normalize_tensor
         ])
     else:
         return Compose([
             resize_pad,
-            albumentations,
+            normalize_tensor,
         ])
 
 
